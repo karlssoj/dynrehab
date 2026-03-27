@@ -24,13 +24,12 @@ def test_angle_3d_45_degrees():
 
 
 def test_angle_3d_uses_z_coordinate():
-    # a has z=1, b at origin, c along y-axis
-    # dot([1,0,1],[0,1,0]) = 0, so angle = 90 degrees regardless of z
-    a_3d = (1.0, 0.0, 1.0, 1.0)
+    # 3D angle = 60°, but 2D (x,y only) angle = 90° — proves z is included
+    a = (1.0, 0.0, 1.0, 1.0)
     b = (0.0, 0.0, 0.0, 1.0)
-    c = (0.0, 1.0, 0.0, 1.0)
-    angle = _angle_3d(a_3d, b, c)
-    assert abs(angle - 90.0) < 0.01
+    c = (0.0, 1.0, 1.0, 1.0)
+    angle = _angle_3d(a, b, c)
+    assert abs(angle - 60.0) < 0.1, f"Expected 60°, got {angle:.2f}° (3D must differ from 2D 90°)"
 
 
 def test_angle_frontal_plane_ignores_z():
