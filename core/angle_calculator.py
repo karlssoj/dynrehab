@@ -1,0 +1,84 @@
+import numpy as np
+
+
+def _angle_3d(a: tuple, b: tuple, c: tuple) -> float:
+    """Angle at point b formed by vectors b→a and b→c using x,y,z coordinates."""
+    va = np.array(a[:3], dtype=float)
+    vb = np.array(b[:3], dtype=float)
+    vc = np.array(c[:3], dtype=float)
+    ba = va - vb
+    bc = vc - vb
+    denom = np.linalg.norm(ba) * np.linalg.norm(bc)
+    if denom < 1e-10:
+        return 0.0
+    cosine = np.dot(ba, bc) / denom
+    return float(np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0))))
+
+
+def _angle_frontal_plane(a: tuple, b: tuple, c: tuple) -> float:
+    """Angle at b using x,y only (frontal plane projection). Used for HKA alignment."""
+    va = np.array([a[0], a[1]], dtype=float)
+    vb = np.array([b[0], b[1]], dtype=float)
+    vc = np.array([c[0], c[1]], dtype=float)
+    ba = va - vb
+    bc = vc - vb
+    denom = np.linalg.norm(ba) * np.linalg.norm(bc)
+    if denom < 1e-10:
+        return 0.0
+    cosine = np.dot(ba, bc) / denom
+    return float(np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0))))
+
+
+def _vector_to_vertical_angle(a: tuple, b: tuple) -> float:
+    """Angle of vector a→b relative to vertical axis (0,-1,0) in image coords (y increases down)."""
+    v = np.array([b[0] - a[0], b[1] - a[1], b[2] - a[2]], dtype=float)
+    vertical = np.array([0.0, -1.0, 0.0])
+    norm = np.linalg.norm(v)
+    if norm < 1e-10:
+        return 0.0
+    cosine = np.dot(v, vertical) / norm
+    return float(np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0))))
+
+
+def _vector_to_horizontal_angle(a: tuple, b: tuple) -> float:
+    """Angle of vector a→b relative to horizontal axis in the image plane."""
+    v = np.array([b[0] - a[0], b[1] - a[1]], dtype=float)
+    norm = np.linalg.norm(v)
+    if norm < 1e-10:
+        return 0.0
+    horizontal = np.array([1.0, 0.0])
+    cosine = np.dot(v, horizontal) / norm
+    return float(np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0))))
+
+
+def calculate_angles(keypoints: dict) -> dict:
+    """Calculate all joint angles from a keypoints dict (name → (x,y,z,vis))."""
+    def lm(name):
+        return keypoints.get(name, (0.0, 0.0, 0.0, 0.0))
+
+    ls = lm("left_shoulder")
+    rs = lm("right_shoulder")
+    lh = lm("left_hip")
+    rh = lm("right_hip")
+    shoulder_mid = tuple((ls[i] + rs[i]) / 2 for i in range(4))
+    hip_mid = tuple((lh[i] + rh[i]) / 2 for i in range(4))
+
+    return {
+        "left_knee_angle":      _angle_3d(lm("left_hip"), lm("left_knee"), lm("left_ankle")),
+        "right_knee_angle":     _angle_3d(lm("right_hip"), lm("right_knee"), lm("right_ankle")),
+        "left_hip_angle":       _angle_3d(lm("left_shoulder"), lm("left_hip"), lm("left_knee")),
+        "right_hip_angle":      _angle_3d(lm("right_shoulder"), lm("right_hip"), lm("right_knee")),
+        "left_ankle_angle":     _angle_3d(lm("left_knee"), lm("left_ankle"), lm("left_foot_index")),
+        "right_ankle_angle":    _angle_3d(lm("right_knee"), lm("right_ankle"), lm("right_foot_index")),
+        "left_shoulder_angle":  _angle_3d(lm("left_elbow"), lm("left_shoulder"), lm("left_hip")),
+        "right_shoulder_angle": _angle_3d(lm("right_elbow"), lm("right_shoulder"), lm("right_hip")),
+        "left_elbow_angle":     _angle_3d(lm("left_shoulder"), lm("left_elbow"), lm("left_wrist")),
+        "right_elbow_angle":    _angle_3d(lm("right_shoulder"), lm("right_elbow"), lm("right_wrist")),
+        "left_wrist_angle":     _angle_3d(lm("left_elbow"), lm("left_wrist"), lm("left_index")),
+        "right_wrist_angle":    _angle_3d(lm("right_elbow"), lm("right_wrist"), lm("right_index")),
+        "trunk_lean_angle":     _vector_to_vertical_angle(hip_mid, shoulder_mid),
+        "neck_angle":           _angle_3d(hip_mid, shoulder_mid, lm("nose")),
+        "pelvic_tilt":          _vector_to_horizontal_angle(lm("left_hip"), lm("right_hip")),
+        "left_hka_alignment":   _angle_frontal_plane(lm("left_hip"), lm("left_knee"), lm("left_ankle")),
+        "right_hka_alignment":  _angle_frontal_plane(lm("right_hip"), lm("right_knee"), lm("right_ankle")),
+    }
