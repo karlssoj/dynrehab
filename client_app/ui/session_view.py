@@ -20,6 +20,7 @@ class SessionViewFrame(ctk.CTkFrame):
         self._engine = PoseEngine()
         self._session: SessionService = None
         self._tts = TTSService(cooldown_seconds=2.0)
+        self._feedback_clear_job = None
         self._build()
         self._start_session()
 
@@ -90,7 +91,11 @@ class SessionViewFrame(ctk.CTkFrame):
             msg = all_feedback[0]["message"]
             self.feedback_label.configure(text=msg)
             self._tts.speak(msg)
-            self.after(3000, lambda: self.feedback_label.configure(text=""))
+            if self._feedback_clear_job is not None:
+                self.after_cancel(self._feedback_clear_job)
+            self._feedback_clear_job = self.after(
+                3000, lambda: self.feedback_label.configure(text="")
+            )
 
     def _update_camera(self, bgr_frame: np.ndarray):
         rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
@@ -100,6 +105,9 @@ class SessionViewFrame(ctk.CTkFrame):
         self.camera_label.image = ctk_img
 
     def _end_session(self):
+        if self._feedback_clear_job is not None:
+            self.after_cancel(self._feedback_clear_job)
+            self._feedback_clear_job = None
         self._engine.stop()
         self._engine.unsubscribe(self._on_frame)
         summary = self._session.get_summary() if self._session else {

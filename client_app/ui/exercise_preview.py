@@ -54,7 +54,7 @@ class ExercisePreviewFrame(ctk.CTkFrame):
         ctk.CTkButton(self, text="Start Session",
                       font=ctk.CTkFont(size=17, weight="bold"),
                       height=50,
-                      command=lambda: self.app.show_session(self.exercise_id)).pack(
+                      command=self._start_session).pack(
             pady=20, ipadx=30)
 
     def _load(self):
@@ -96,6 +96,10 @@ class ExercisePreviewFrame(ctk.CTkFrame):
             cap.release()
         self._playing = False
         self.after(0, lambda: self.play_btn.configure(state="normal"))
+
+    def _start_session(self):
+        self._playing = False
+        self.app.show_session(self.exercise_id)
 
     def _back(self):
         self._playing = False
