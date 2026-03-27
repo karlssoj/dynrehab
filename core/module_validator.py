@@ -31,7 +31,7 @@ def validate_module(code: str) -> dict:
     # 3. Check required functions are defined at module level
     defined = {
         node.name
-        for node in ast.walk(tree)
+        for node in tree.body
         if isinstance(node, ast.FunctionDef)
     }
     missing = REQUIRED_FUNCTIONS - defined

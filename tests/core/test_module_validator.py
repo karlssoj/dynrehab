@@ -72,3 +72,18 @@ def test_math_import_allowed():
     code = VALID_CODE + "\nimport math"
     result = validate_module(code)
     assert result["valid"] is True
+
+
+def test_nested_function_not_accepted():
+    code = """
+def wrapper():
+    def analyze_frame(pose_data):
+        return []
+    def detect_rep(pose_data):
+        return False
+    def on_rep_complete(rep_data):
+        return []
+"""
+    result = validate_module(code)
+    assert result["valid"] is False
+    assert "analyze_frame" in result["error"]
