@@ -64,48 +64,49 @@ class PoseEngine:
 
     def _run(self, camera_index: int):
         cap = cv2.VideoCapture(camera_index)
-        start_time = time.time()
-        with self._mp_pose.Pose(
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5,
-            model_complexity=1,
-        ) as pose:
-            while self._running and cap.isOpened():
-                ret, frame = cap.read()
-                if not ret:
-                    break
+        try:
+            start_time = time.time()
+            with self._mp_pose.Pose(
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5,
+                model_complexity=1,
+            ) as pose:
+                while self._running and cap.isOpened():
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
 
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                rgb.flags.writeable = False
-                results = pose.process(rgb)
-                rgb.flags.writeable = True
-                annotated = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    rgb.flags.writeable = False
+                    results = pose.process(rgb)
+                    rgb.flags.writeable = True
+                    annotated = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
 
-                pose_frame = PoseFrame(timestamp=time.time() - start_time)
+                    pose_frame = PoseFrame(timestamp=time.time() - start_time)
 
-                if results.pose_landmarks:
-                    lms = results.pose_landmarks.landmark
-                    keypoints = {
-                        LANDMARK_NAMES[i]: (lm.x, lm.y, lm.z, lm.visibility)
-                        for i, lm in enumerate(lms)
-                        if i in LANDMARK_NAMES
-                    }
-                    angles = calculate_angles(keypoints)
-                    for k, v in angles.items():
-                        setattr(pose_frame, k, v)
-                    pose_frame.keypoints = keypoints
-                    annotated = self._draw_overlay(annotated, keypoints)
+                    if results.pose_landmarks:
+                        lms = results.pose_landmarks.landmark
+                        keypoints = {
+                            LANDMARK_NAMES[i]: (lm.x, lm.y, lm.z, lm.visibility)
+                            for i, lm in enumerate(lms)
+                            if i in LANDMARK_NAMES
+                        }
+                        angles = calculate_angles(keypoints)
+                        for k, v in angles.items():
+                            setattr(pose_frame, k, v)
+                        pose_frame.keypoints = keypoints
+                        annotated = self._draw_overlay(annotated, keypoints)
 
-                with self._lock:
-                    subs = list(self._subscribers)
+                    with self._lock:
+                        subs = list(self._subscribers)
 
-                for cb in subs:
-                    try:
-                        cb(pose_frame, annotated)
-                    except Exception:
-                        pass
-
-        cap.release()
+                    for cb in subs:
+                        try:
+                            cb(pose_frame, annotated)
+                        except Exception:
+                            pass
+        finally:
+            cap.release()
 
     def _draw_overlay(self, frame: np.ndarray, keypoints: dict) -> np.ndarray:
         h, w = frame.shape[:2]
