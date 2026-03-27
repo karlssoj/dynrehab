@@ -39,8 +39,9 @@ class CodeViewerFrame(ctk.CTkFrame):
         self.status_badge = ctk.CTkLabel(controls, text="",
                                          font=ctk.CTkFont(size=13))
         self.status_badge.pack(side="left", padx=12)
-        ctk.CTkButton(controls, text="Regenerate",
-                      command=self._regenerate).pack(side="right")
+        self._regen_btn = ctk.CTkButton(controls, text="Regenerate",
+                                        command=self._regenerate)
+        self._regen_btn.pack(side="right")
         self.regen_status = ctk.CTkLabel(controls, text="")
         self.regen_status.pack(side="right", padx=8)
 
@@ -59,7 +60,10 @@ class CodeViewerFrame(ctk.CTkFrame):
         self._show_module(self._modules[0])
 
     def _on_version_selected(self, label: str):
-        idx = list(self.version_menu.cget("values")).index(label)
+        try:
+            idx = list(self.version_menu.cget("values")).index(label)
+        except ValueError:
+            return
         self._show_module(self._modules[idx])
 
     def _show_module(self, module: dict):
@@ -78,6 +82,7 @@ class CodeViewerFrame(ctk.CTkFrame):
         if ex is None:
             return
         self.regen_status.configure(text="Regenerating…", text_color="white")
+        self._regen_btn.configure(state="disabled")
         api_key = os.getenv("ANTHROPIC_API_KEY", "")
         llm_svc = LLMService(self.db_conn, api_key=api_key)
 
@@ -89,6 +94,7 @@ class CodeViewerFrame(ctk.CTkFrame):
         threading.Thread(target=run, daemon=True).start()
 
     def _on_regen_done(self, status: str):
+        self._regen_btn.configure(state="normal")
         if status == "validated":
             self.regen_status.configure(text="✓ Regenerated", text_color="#2ecc71")
         else:

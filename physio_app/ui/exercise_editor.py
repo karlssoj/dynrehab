@@ -18,6 +18,7 @@ class ExerciseEditorFrame(ctk.CTkFrame):
         self.db_conn = db_conn
         self.ex_svc = ExerciseService(db_conn)
         self.exercise_id = exercise_id
+        self._original_exercise_id = exercise_id  # track if exercise pre-existed
         self._recorder: VideoRecorder = None
         self._recording = False
         self._video_path = None
@@ -77,8 +78,9 @@ class ExerciseEditorFrame(ctk.CTkFrame):
         # Bottom — save
         bottom = ctk.CTkFrame(self, fg_color="transparent")
         bottom.pack(fill="x", padx=20, pady=15)
-        ctk.CTkButton(bottom, text="Save & Generate Analysis",
-                      command=self._save_and_generate).pack(side="left")
+        self._save_btn = ctk.CTkButton(bottom, text="Save & Generate Analysis",
+                                       command=self._save_and_generate)
+        self._save_btn.pack(side="left")
         self.status_label = ctk.CTkLabel(bottom, text="")
         self.status_label.pack(side="left", padx=12)
 
@@ -94,7 +96,8 @@ class ExerciseEditorFrame(ctk.CTkFrame):
             self.video_status.configure(text=f"Video: {Path(ex.reference_video_path).name}")
 
     def _get_video_path(self, exercise_id: str) -> str:
-        return str(Path("data/exercises") / exercise_id / "reference.mp4")
+        project_root = Path(__file__).parent.parent.parent
+        return str(project_root / "data" / "exercises" / exercise_id / "reference.mp4")
 
     def _start_recording(self):
         if self.exercise_id is None:
@@ -124,8 +127,10 @@ class ExerciseEditorFrame(ctk.CTkFrame):
         rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
         img = Image.fromarray(cv2.resize(rgb, (320, 240)))
         ctk_img = ctk.CTkImage(light_image=img, size=(320, 240))
-        self.video_label.configure(image=ctk_img, text="")
-        self.video_label.image = ctk_img
+        self.after(0, lambda i=ctk_img: (
+            self.video_label.configure(image=i, text=""),
+            setattr(self.video_label, "image", i),
+        ))
 
     def _save_exercise(self) -> str:
         name = self.name_entry.get().strip() or "Unnamed Exercise"
@@ -150,7 +155,7 @@ class ExerciseEditorFrame(ctk.CTkFrame):
             self.exercise_id = ex.id
 
         self.status_label.configure(text="Generating analysis code…", text_color="white")
-        self.update()
+        self._save_btn.configure(state="disabled")
 
         api_key = os.getenv("ANTHROPIC_API_KEY", "")
         llm_svc = LLMService(self.db_conn, api_key=api_key)
@@ -162,6 +167,7 @@ class ExerciseEditorFrame(ctk.CTkFrame):
         threading.Thread(target=run, daemon=True).start()
 
     def _on_generation_done(self, status: str):
+        self._save_btn.configure(state="normal")
         if status == "validated":
             self.status_label.configure(text="✓ Code generated successfully",
                                         text_color="#2ecc71")
@@ -173,4 +179,10 @@ class ExerciseEditorFrame(ctk.CTkFrame):
     def _back(self):
         if self._recorder:
             self._recorder.stop()
+        self._recording = False
+        self._recorder = None
+        # Clean up a new exercise created only for recording if it was never completed
+        if self._original_exercise_id is None and self.exercise_id is not None:
+            if self.ex_svc.get_active_module(self.exercise_id) is None:
+                self.ex_svc.delete(self.exercise_id)
         self.app.show_exercise_list()

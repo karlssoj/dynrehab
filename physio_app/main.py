@@ -5,8 +5,10 @@ from physio_app.ui.app import PhysioApp
 def main():
     conn = init_db()
     app = PhysioApp(conn)
-    app.mainloop()
-    conn.close()
+    try:
+        app.mainloop()
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":
