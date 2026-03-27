@@ -1,0 +1,115 @@
+import sqlite3
+import uuid
+from dataclasses import dataclass
+from typing import Optional
+
+
+@dataclass
+class Exercise:
+    id: str
+    name: str
+    camera_view: str
+    instructions_text: str
+    reference_video_path: str
+    created_at: str
+
+
+class ExerciseService:
+    def __init__(self, conn: sqlite3.Connection):
+        self.conn = conn
+
+    def create(self, name: str, camera_view: str, instructions_text: str) -> Exercise:
+        ex_id = str(uuid.uuid4())
+        self.conn.execute(
+            "INSERT INTO exercises (id, name, camera_view, instructions_text) VALUES (?, ?, ?, ?)",
+            (ex_id, name, camera_view, instructions_text),
+        )
+        self.conn.commit()
+        return self.get(ex_id)
+
+    def get(self, exercise_id: str) -> Optional[Exercise]:
+        row = self.conn.execute(
+            "SELECT * FROM exercises WHERE id = ?", (exercise_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_exercise(row)
+
+    def list_all(self) -> list[Exercise]:
+        rows = self.conn.execute(
+            "SELECT * FROM exercises ORDER BY created_at DESC"
+        ).fetchall()
+        return [self._row_to_exercise(r) for r in rows]
+
+    def update(self, exercise_id: str, name: str = None, camera_view: str = None,
+               instructions_text: str = None, reference_video_path: str = None) -> Exercise:
+        updates, params = [], []
+        for col, val in [("name", name), ("camera_view", camera_view),
+                         ("instructions_text", instructions_text),
+                         ("reference_video_path", reference_video_path)]:
+            if val is not None:
+                updates.append(f"{col} = ?")
+                params.append(val)
+        if updates:
+            params.append(exercise_id)
+            self.conn.execute(f"UPDATE exercises SET {', '.join(updates)} WHERE id = ?", params)
+            self.conn.commit()
+        return self.get(exercise_id)
+
+    def delete(self, exercise_id: str):
+        self.conn.execute("DELETE FROM exercises WHERE id = ?", (exercise_id,))
+        self.conn.commit()
+
+    def get_active_module(self, exercise_id: str) -> Optional[dict]:
+        row = self.conn.execute(
+            "SELECT * FROM analysis_modules WHERE exercise_id = ? AND is_active = 1",
+            (exercise_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def save_module(self, exercise_id: str, code: str, status: str) -> dict:
+        max_ver = self.conn.execute(
+            "SELECT MAX(version) FROM analysis_modules WHERE exercise_id = ?",
+            (exercise_id,),
+        ).fetchone()[0]
+        next_ver = (max_ver or 0) + 1
+        self.conn.execute(
+            "UPDATE analysis_modules SET is_active = 0 WHERE exercise_id = ?",
+            (exercise_id,),
+        )
+        mod_id = str(uuid.uuid4())
+        self.conn.execute(
+            "INSERT INTO analysis_modules (id, exercise_id, version, code, status, is_active) "
+            "VALUES (?, ?, ?, ?, ?, 1)",
+            (mod_id, exercise_id, next_ver, code, status),
+        )
+        self.conn.commit()
+        return dict(self.conn.execute(
+            "SELECT * FROM analysis_modules WHERE id = ?", (mod_id,)
+        ).fetchone())
+
+    def list_modules(self, exercise_id: str) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM analysis_modules WHERE exercise_id = ? ORDER BY version DESC",
+            (exercise_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def set_active_module(self, exercise_id: str, module_id: str):
+        self.conn.execute(
+            "UPDATE analysis_modules SET is_active = 0 WHERE exercise_id = ?", (exercise_id,)
+        )
+        self.conn.execute(
+            "UPDATE analysis_modules SET is_active = 1 WHERE id = ?", (module_id,)
+        )
+        self.conn.commit()
+
+    @staticmethod
+    def _row_to_exercise(row) -> Exercise:
+        d = dict(row)
+        return Exercise(
+            id=d["id"], name=d["name"], camera_view=d["camera_view"],
+            instructions_text=d.get("instructions_text") or "",
+            reference_video_path=d.get("reference_video_path") or "",
+            created_at=d.get("created_at") or "",
+        )
