@@ -62,3 +62,19 @@ def test_generate_module_logs_api_call(tmp_db, mocker):
     log = tmp_db.execute("SELECT * FROM llm_logs WHERE exercise_id = ?", (ex.id,)).fetchone()
     assert log is not None
     assert "analyze_frame" in log["response"]
+
+
+def test_build_prompt_contains_throttle_pattern():
+    prompt = build_prompt("Squat", "side", "instructions")
+    assert "_last_feedback_at" in prompt
+    assert "_FEEDBACK_COOLDOWN" in prompt
+
+
+def test_build_prompt_contains_bidirectional_threshold_guidance():
+    prompt = build_prompt("Squat", "side", "instructions")
+    assert "EXTEND_THRESHOLD" in prompt
+
+
+def test_build_prompt_contains_independent_if_guidance():
+    prompt = build_prompt("Squat", "side", "instructions")
+    assert "elif" not in prompt or "not elif" in prompt.lower() or "separate if" in prompt.lower()

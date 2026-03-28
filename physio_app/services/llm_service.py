@@ -28,41 +28,58 @@ _FUNCTION_SPEC = """\
 Implement exactly these three functions:
 
 def analyze_frame(pose_data: dict) -> list[dict]:
-    # Called every frame. Return feedback dicts or [].
+    # Called every frame (~30 FPS). Return feedback dicts or [].
     # Each dict: {"message": str, "joint": str | None}
     # "joint" is a landmark name to highlight (e.g. "left_knee") or None.
-    # Only return feedback when a rule is currently violated.
+    # IMPORTANT: use a module-level _last_feedback_at = 0.0 variable and
+    # pose_data["timestamp"] to throttle — only emit feedback if at least
+    # _FEEDBACK_COOLDOWN seconds have passed since the last emission.
+    # This prevents the same message from firing 30 times per second.
 
 def detect_rep(pose_data: dict) -> bool:
     # Called every frame. Return True exactly once when a full rep is completed.
     # Use module-level state variables to track the rep phase.
+    # For exercises where a joint moves away from resting and then returns,
+    # the two phase transitions use OPPOSITE comparisons:
+    #   Phase 1 complete: angle crosses threshold in movement direction (e.g. <= BEND_THRESHOLD)
+    #   Phase 2 complete: angle returns past a separate EXTEND_THRESHOLD  (e.g. >= EXTEND_THRESHOLD)
+    # NEVER use <= small_value to detect a return-to-extension.
+    # The return phase ends when the angle rises back ABOVE a large threshold (~160°+).
 
 def on_rep_complete(rep_data: dict) -> list[dict]:
     # Called once after detect_rep returns True.
     # rep_data: {"rep_number": int, "frames": list[dict], "duration_seconds": float}
     # Return feedback dicts or [].
+    # Use separate if statements (NOT elif) for independent quality checks —
+    # the patient may need feedback on both insufficient bend AND insufficient extension.
 """
 
 _FEW_SHOT = """\
-Example — Side-view bicep curl:
+Example 1 — Side-view bicep curl:
 
 ```python
 _phase = "down"
-_CURL_UP = 60
-_CURL_DOWN = 150
+_CURL_UP = 60        # angle at peak curl (arm bent)
+_CURL_DOWN = 150     # angle at full extension — use >= to detect the return
+_last_feedback_at = 0.0
+_FEEDBACK_COOLDOWN = 4.0
 
 def analyze_frame(pose_data):
+    global _last_feedback_at
+    now = pose_data.get("timestamp", 0.0)
     feedback = []
     if pose_data["left_shoulder_angle"] < 160:
-        feedback.append({"message": "Keep your upper arm still", "joint": "left_shoulder"})
+        if now - _last_feedback_at >= _FEEDBACK_COOLDOWN:
+            feedback.append({"message": "Keep your upper arm still", "joint": "left_shoulder"})
+            _last_feedback_at = now
     return feedback
 
 def detect_rep(pose_data):
     global _phase
     avg = (pose_data["left_elbow_angle"] + pose_data["right_elbow_angle"]) / 2
-    if _phase == "down" and avg < _CURL_UP:
+    if _phase == "down" and avg <= _CURL_UP:       # angle DECREASES into the curl
         _phase = "up"
-    elif _phase == "up" and avg > _CURL_DOWN:
+    elif _phase == "up" and avg >= _CURL_DOWN:     # angle INCREASES back to extension
         _phase = "down"
         return True
     return False
@@ -70,9 +87,58 @@ def detect_rep(pose_data):
 def on_rep_complete(rep_data):
     frames = rep_data["frames"]
     min_elbow = min(f["left_elbow_angle"] for f in frames)
+    max_elbow = max(f["left_elbow_angle"] for f in frames)
+    feedback = []
     if min_elbow > 70:
-        return [{"message": "Try to curl higher for full range of motion", "joint": None}]
-    return [{"message": "Great curl!", "joint": None}]
+        feedback.append({"message": "Curl higher for full range of motion", "joint": None})
+    if max_elbow < 140:                            # separate if, NOT elif
+        feedback.append({"message": "Fully extend your arm at the bottom", "joint": None})
+    if not feedback:
+        feedback.append({"message": "Great curl!", "joint": None})
+    return feedback
+```
+
+Example 2 — Side-view knee bend (angle decreases into bend, increases on return):
+
+```python
+_phase = "up"
+_BEND_THRESHOLD = 100    # knee angle at deepest bend — phase switches when <= this
+_EXTEND_THRESHOLD = 160  # knee angle at full extension — phase switches when >= this (NOT a small value)
+_last_feedback_at = 0.0
+_FEEDBACK_COOLDOWN = 4.0
+
+def analyze_frame(pose_data):
+    global _last_feedback_at
+    now = pose_data.get("timestamp", 0.0)
+    feedback = []
+    if pose_data.get("trunk_lean_angle", 0) > 30:
+        if now - _last_feedback_at >= _FEEDBACK_COOLDOWN:
+            feedback.append({"message": "Keep your back straight", "joint": None})
+            _last_feedback_at = now
+    return feedback
+
+def detect_rep(pose_data):
+    global _phase
+    angle = pose_data.get("left_knee_angle", 180)
+    if _phase == "up" and angle <= _BEND_THRESHOLD:       # angle DECREASES into bend
+        _phase = "down"
+    elif _phase == "down" and angle >= _EXTEND_THRESHOLD: # angle INCREASES back up
+        _phase = "up"
+        return True
+    return False
+
+def on_rep_complete(rep_data):
+    frames = rep_data["frames"]
+    min_knee = min(f.get("left_knee_angle", 180) for f in frames)
+    max_knee = max(f.get("left_knee_angle", 180) for f in frames)
+    feedback = []
+    if min_knee > _BEND_THRESHOLD:
+        feedback.append({"message": f"Bend deeper — reached {min_knee:.0f}°, aim for {_BEND_THRESHOLD}°", "joint": None})
+    if max_knee < _EXTEND_THRESHOLD:               # separate if, NOT elif
+        feedback.append({"message": f"Straighten more — reached {max_knee:.0f}°, aim for {_EXTEND_THRESHOLD}°", "joint": None})
+    if not feedback:
+        feedback.append({"message": "Great rep!", "joint": None})
+    return feedback
 ```
 """
 
