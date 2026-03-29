@@ -77,4 +77,4 @@ def test_build_prompt_contains_bidirectional_threshold_guidance():
 
 def test_build_prompt_contains_independent_if_guidance():
     prompt = build_prompt("Squat", "side", "instructions")
-    assert "elif" not in prompt or "not elif" in prompt.lower() or "separate if" in prompt.lower()
+    assert "separate if" in prompt.lower() or "not elif" in prompt.lower()
