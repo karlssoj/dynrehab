@@ -1,5 +1,4 @@
 import cv2
-import mediapipe as mp
 from mediapipe.python.solutions.pose import Pose
 from core.angle_calculator import calculate_angles
 from core.pose_engine import LANDMARK_NAMES
