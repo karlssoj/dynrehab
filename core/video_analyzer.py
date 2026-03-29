@@ -1,9 +1,13 @@
 import cv2
-from mediapipe.python.solutions.pose import Pose
 from core.angle_calculator import calculate_angles
 from core.pose_engine import LANDMARK_NAMES
 
 _MIN_RANGE = 10.0
+
+try:
+    from mediapipe.python.solutions.pose import Pose
+except ImportError:  # mediapipe Tasks API (>=0.10) does not expose this path
+    Pose = None  # type: ignore[assignment,misc]
 
 
 def analyze_reference_video(video_path: str) -> dict[str, dict]:
@@ -13,6 +17,9 @@ def analyze_reference_video(video_path: str) -> dict[str, dict]:
     for every joint where the range of motion exceeded 10 degrees.
     Returns {} if the video cannot be opened or contains no detected poses.
     """
+    if Pose is None:
+        return {}
+
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         return {}

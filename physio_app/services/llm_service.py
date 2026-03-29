@@ -2,6 +2,7 @@ import sqlite3
 import uuid
 import anthropic
 from core.module_validator import validate_module
+from core.video_analyzer import analyze_reference_video
 from physio_app.services.exercise_service import ExerciseService
 
 _POSE_DATA_DESCRIPTION = """\
@@ -195,7 +196,15 @@ class LLMService:
     def generate_module(self, exercise_id: str, name: str, camera_view: str,
                         instructions: str) -> dict:
         """Call Claude, validate the result, store it. Returns the saved module dict."""
-        prompt = build_prompt(name, camera_view, instructions)
+        reference_data = None
+        ex = self.ex_svc.get(exercise_id)
+        if ex and ex.reference_video_path:
+            try:
+                reference_data = analyze_reference_video(ex.reference_video_path) or None
+            except Exception:
+                reference_data = None
+
+        prompt = build_prompt(name, camera_view, instructions, reference_data)
         response_text = ""
         status = "failed"
         try:
