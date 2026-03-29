@@ -143,7 +143,25 @@ def on_rep_complete(rep_data):
 """
 
 
-def build_prompt(exercise_name: str, camera_view: str, instructions: str) -> str:
+def _format_reference_data(reference_data: dict) -> str:
+    lines = ["Reference movement data (measured from therapist's demo video):"]
+    for joint, stats in sorted(reference_data.items()):
+        lines.append(
+            f"  {joint}: min={stats['min']:.0f}°  max={stats['max']:.0f}°  range={stats['range']:.0f}°"
+        )
+    lines += [
+        "",
+        "Use these measured values to calibrate your detection thresholds.",
+        "Joints not listed did not move significantly during the demo.",
+    ]
+    return "\n".join(lines)
+
+
+def build_prompt(exercise_name: str, camera_view: str, instructions: str,
+                 reference_data: dict | None = None) -> str:
+    ref_section = ""
+    if reference_data:
+        ref_section = "\n" + _format_reference_data(reference_data) + "\n"
     return f"""\
 You are generating a Python movement analysis module for a physiotherapy application.
 
@@ -154,8 +172,7 @@ Physiotherapist instructions:
 {instructions}
 
 Available pose data fields:
-{_POSE_DATA_DESCRIPTION}
-
+{_POSE_DATA_DESCRIPTION}{ref_section}
 {_FEW_SHOT}
 
 Now generate the analysis module for '{exercise_name}' following the same structure.

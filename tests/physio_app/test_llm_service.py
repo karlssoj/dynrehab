@@ -78,3 +78,26 @@ def test_build_prompt_contains_bidirectional_threshold_guidance():
 def test_build_prompt_contains_independent_if_guidance():
     prompt = build_prompt("Squat", "side", "instructions")
     assert "separate if" in prompt.lower() or "not elif" in prompt.lower()
+
+
+def test_build_prompt_includes_reference_data_when_provided():
+    reference_data = {
+        "left_elbow_angle": {"min": 44.0, "max": 163.0, "range": 119.0},
+        "left_shoulder_angle": {"min": 28.0, "max": 171.0, "range": 143.0},
+    }
+    prompt = build_prompt("Bicep Curl", "side", "Curl slowly", reference_data=reference_data)
+    assert "Reference movement data" in prompt
+    assert "left_elbow_angle" in prompt
+    assert "min=44" in prompt
+    assert "max=163" in prompt
+    assert "left_shoulder_angle" in prompt
+
+
+def test_build_prompt_omits_reference_section_when_none():
+    prompt = build_prompt("Squat", "side", "instructions", reference_data=None)
+    assert "Reference movement data" not in prompt
+
+
+def test_build_prompt_omits_reference_section_when_empty_dict():
+    prompt = build_prompt("Squat", "side", "instructions", reference_data={})
+    assert "Reference movement data" not in prompt
