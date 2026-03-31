@@ -1,5 +1,6 @@
 import customtkinter as ctk
 import sqlite3
+import time
 import numpy as np
 import cv2
 from PIL import Image
@@ -19,8 +20,10 @@ class SessionViewFrame(ctk.CTkFrame):
         self.ex_svc = ExerciseService(db_conn)
         self._engine = PoseEngine()
         self._session: SessionService = None
-        self._tts = TTSService(cooldown_seconds=2.0)
-        self._feedback_clear_job = None
+        self._tts = TTSService(cooldown_seconds=0.0)
+        self._feedback_lines: list[str] = []
+        self._instructions_spoken = False   # True once instructions TTS has been queued
+        self._countdown_triggered = False   # True once start_countdown() has been called
         self._build()
         self._start_session()
 
@@ -69,49 +72,233 @@ class SessionViewFrame(ctk.CTkFrame):
             return
         self._session = SessionService(exercise_id=self.exercise_id,
                                        module_code=module["code"])
+        instructions = self._session.get_instructions()
+        if instructions:
+            # Speak all lines joined as one message so nothing gets drained by the
+            # latest-wins queue, then poll is_speaking() each frame to start countdown.
+            self._tts.speak_immediate(". ".join(instructions))
+            self._instructions_spoken = True
+        else:
+            self._session.start_countdown()
+            self._countdown_triggered = True
         self._engine.subscribe(self._on_frame)
         self._engine.start()
 
     def _on_frame(self, pose_frame: PoseFrame, annotated: np.ndarray):
         if self._session is None:
-            self.after(0, lambda f=annotated: self._update_camera(f))
+            self.after(0, lambda f=annotated: self._update_camera(f, None))
             return
 
         result = self._session.process_frame(pose_frame.to_dict())
-        self._engine.set_highlight_joints(result["highlight_joints"])
 
-        self.after(0, lambda r=result, f=annotated: self._update_ui(r, f))
+        self.after(0, lambda r=result, f=annotated, p=pose_frame: self._update_ui(r, f, p))
 
-    def _update_ui(self, result: dict, frame: np.ndarray):
-        self._update_camera(frame)
-        self.rep_label.configure(text=str(result["rep_count"]))
+    def _update_ui(self, result: dict, frame: np.ndarray, pose_frame: PoseFrame):
+        state = result["state"]
+        display = frame.copy()
 
-        all_feedback = result["feedback"] + result["post_rep_feedback"]
-        if all_feedback:
-            msg = all_feedback[0]["message"]
-            self.feedback_label.configure(text=msg)
-            self._tts.speak(msg)
-            if self._feedback_clear_job is not None:
-                self.after_cancel(self._feedback_clear_job)
-            self._feedback_clear_job = self.after(
-                3000, lambda: self.feedback_label.configure(text="")
-            )
+        # Draw state overlays onto the OpenCV frame before passing to camera
+        h, w = display.shape[:2]
 
-    def _update_camera(self, bgr_frame: np.ndarray):
-        rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
+        if state == "instructions":
+            overlay = display.copy()
+            cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
+            cv2.addWeighted(overlay, 0.6, display, 0.4, 0, display)
+            text = "Listening to instructions..."
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            text_size = cv2.getTextSize(text, font, 0.8, 2)[0]
+            tx = (w - text_size[0]) // 2
+            ty = h // 2
+            cv2.putText(display, text, (tx, ty), font, 0.8, (0, 220, 255), 2)
+            # Start countdown as soon as TTS finishes — no fixed delay
+            if (self._instructions_spoken and not self._countdown_triggered
+                    and not self._tts.is_speaking()):
+                self._countdown_triggered = True
+                self._session.start_countdown()
+
+        elif state == "countdown":
+            overlay = display.copy()
+            cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
+            cv2.addWeighted(overlay, 0.5, display, 0.5, 0, display)
+
+            round_num = result["round_number"] + 1
+            cv2.putText(display, f"Round {round_num} starting...",
+                        (30, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 220, 255), 2)
+
+            countdown_speak = result.get("countdown_speak")
+            if countdown_speak is not None:
+                if countdown_speak > 0:
+                    count_str = str(countdown_speak)
+                    text_size = cv2.getTextSize(count_str, cv2.FONT_HERSHEY_SIMPLEX, 5.0, 8)[0]
+                    tx = (w - text_size[0]) // 2
+                    ty = (h + text_size[1]) // 2
+                    cv2.putText(display, count_str, (tx, ty),
+                                cv2.FONT_HERSHEY_SIMPLEX, 5.0, (0, 255, 255), 8)
+                else:
+                    text_size = cv2.getTextSize("GO!", cv2.FONT_HERSHEY_SIMPLEX, 4.0, 8)[0]
+                    tx = (w - text_size[0]) // 2
+                    ty = (h + text_size[1]) // 2
+                    cv2.putText(display, "GO!", (tx, ty),
+                                cv2.FONT_HERSHEY_SIMPLEX, 4.0, (0, 255, 0), 8)
+            else:
+                # Draw the current countdown number based on time_remaining
+                remaining = result.get("time_remaining", 0.0)
+                import math
+                count_num = max(0, math.ceil(remaining))
+                if count_num > 0:
+                    count_str = str(count_num)
+                    text_size = cv2.getTextSize(count_str, cv2.FONT_HERSHEY_SIMPLEX, 5.0, 8)[0]
+                    tx = (w - text_size[0]) // 2
+                    ty = (h + text_size[1]) // 2
+                    cv2.putText(display, count_str, (tx, ty),
+                                cv2.FONT_HERSHEY_SIMPLEX, 5.0, (0, 255, 255), 8)
+
+        elif state == "exercise":
+            time_left = result.get("time_remaining", 0.0)
+            round_num = result["round_number"]
+            round_reps = result["round_rep_count"]
+
+            cv2.putText(display, f"Round {round_num}  |  Reps: {round_reps}",
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            cv2.putText(display, f"Time left: {max(0.0, time_left):.1f}s",
+                        (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+
+            from client_app.services.session_service import EXERCISE_SECS
+            elapsed = EXERCISE_SECS - time_left
+            bar_width = int(min(1.0, elapsed / EXERCISE_SECS) * w)
+            cv2.rectangle(display, (0, h - 8), (bar_width, h), (0, 200, 255), -1)
+
+        elif state == "feedback":
+            overlay = display.copy()
+            cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
+            cv2.addWeighted(overlay, 0.65, display, 0.35, 0, display)
+
+            round_num = result["round_number"]
+            cv2.putText(display, f"Round {round_num} Feedback",
+                        (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 220, 255), 2)
+
+            lines_to_draw = self._feedback_lines
+            line_height = 30
+            y_cursor = 80
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            for line in lines_to_draw:
+                words = line.split()
+                rows = []
+                current = ""
+                for word in words:
+                    test = current + " " + word if current else word
+                    if len(test) > 70:
+                        if current:
+                            rows.append(current)
+                        current = word
+                    else:
+                        current = test
+                if current:
+                    rows.append(current)
+                for row in rows:
+                    if y_cursor < h - 40:
+                        cv2.putText(display, row, (20, y_cursor),
+                                    font, 0.55, (255, 255, 255), 1)
+                        y_cursor += line_height
+
+        # Handle countdown speech
+        countdown_speak = result.get("countdown_speak")
+        if countdown_speak is not None and state == "countdown":
+            if countdown_speak > 0:
+                self._tts.speak(str(countdown_speak))
+            else:
+                self._tts.speak("Go!")
+
+        # Handle feedback_lines — only non-None on the first frame of feedback state
+        feedback_lines = result.get("feedback_lines")
+        if feedback_lines is not None:
+            self._feedback_lines = list(feedback_lines)
+            self._tts.speak_immediate(". ".join(feedback_lines))
+            self._feedback_end_scheduled = False
+
+        # Poll: once feedback speech finishes, move to next countdown
+        if state == "feedback" and not getattr(self, "_feedback_end_scheduled", False):
+            if not self._tts.is_speaking():
+                self._feedback_end_scheduled = True
+                self._session.end_feedback()
+
+        # Update camera with angle overlay
+        self._update_camera(display, pose_frame)
+
+        # Update right panel labels based on state
+        if state == "instructions":
+            self.rep_label.configure(text="—")
+            self.feedback_label.configure(text="Instructions...")
+        elif state == "countdown":
+            self.rep_label.configure(text=str(result["round_number"] + 1))
+            self.feedback_label.configure(text="Get ready!")
+        elif state == "exercise":
+            self.rep_label.configure(text=str(result["round_rep_count"]))
+            self.feedback_label.configure(text="EXERCISE")
+        elif state == "feedback":
+            self.rep_label.configure(text=str(result["round_rep_count"]))
+            first_line = self._feedback_lines[0] if self._feedback_lines else ""
+            self.feedback_label.configure(text=first_line)
+
+    _ANGLE_FIELDS = [
+        ("L elbow",    "left_elbow_angle"),
+        ("R elbow",    "right_elbow_angle"),
+        ("L shoulder", "left_shoulder_angle"),
+        ("R shoulder", "right_shoulder_angle"),
+        ("L knee",     "left_knee_angle"),
+        ("R knee",     "right_knee_angle"),
+        ("L hip",      "left_hip_angle"),
+        ("R hip",      "right_hip_angle"),
+        ("L ankle",    "left_ankle_angle"),
+        ("R ankle",    "right_ankle_angle"),
+        ("trunk lean", "trunk_lean_angle"),
+        ("neck",       "neck_angle"),
+        ("pelvic tilt","pelvic_tilt"),
+        ("L HKA",      "left_hka_alignment"),
+        ("R HKA",      "right_hka_alignment"),
+        ("L arm elev", "left_arm_elevation"),
+        ("R arm elev", "right_arm_elevation"),
+    ]
+
+    def _update_camera(self, bgr_frame: np.ndarray, pose_frame: PoseFrame | None):
+        frame = bgr_frame.copy()
+        if pose_frame is not None:
+            self._draw_angle_overlay(frame, pose_frame)
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         img = Image.fromarray(cv2.resize(rgb, (640, 480)))
         ctk_img = ctk.CTkImage(light_image=img, size=(640, 480))
         self.camera_label.configure(image=ctk_img, text="")
         self.camera_label.image = ctk_img
 
+    def _draw_angle_overlay(self, frame: np.ndarray, pose_frame: PoseFrame):
+        font       = cv2.FONT_HERSHEY_SIMPLEX
+        scale      = 0.45
+        thickness  = 1
+        line_h     = 18
+        pad        = 6
+        col_w      = 155
+
+        rows = self._ANGLE_FIELDS
+        box_h = pad * 2 + len(rows) * line_h
+        box_w = pad * 2 + col_w
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (0, 0), (box_w, box_h), (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.5, frame, 0.5, 0, frame)
+
+        for i, (label, attr) in enumerate(rows):
+            val = getattr(pose_frame, attr, 0.0)
+            text = f"{label}: {val:.0f}"
+            y = pad + (i + 1) * line_h
+            cv2.putText(frame, text, (pad, y), font, scale, (0, 220, 255), thickness)
+
     def _end_session(self):
-        if self._feedback_clear_job is not None:
-            self.after_cancel(self._feedback_clear_job)
-            self._feedback_clear_job = None
         self._engine.stop()
         self._engine.unsubscribe(self._on_frame)
         summary = self._session.get_summary() if self._session else {
             "rep_count": 0, "quality_pct": 0, "feedback_log": [], "duration_seconds": 0
         }
+        speech = self._session.get_session_summary_speech() if self._session else ""
+        if speech:
+            self._tts.speak_immediate(speech)
         ex = self.ex_svc.get(self.exercise_id)
         self.app.show_session_summary(summary, ex.name if ex else "Exercise")

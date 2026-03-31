@@ -1,8 +1,12 @@
 import builtins
+import math
 import time
 from typing import Optional
 
 ALLOWED_IMPORT_NAMES = {"math", "statistics", "collections", "itertools", "functools"}
+
+COUNTDOWN_SECS = 5
+EXERCISE_SECS = 10
 
 
 def _make_safe_import():
@@ -34,75 +38,162 @@ SAFE_BUILTINS["__import__"] = _make_safe_import()
 class SessionService:
     def __init__(self, exercise_id: str, module_code: str):
         self.exercise_id = exercise_id
-        self.rep_count = 0
-        self._rep_frames: list[dict] = []
-        self._rep_start_time: Optional[float] = None
-        self._feedback_log: list[dict] = []
-        self._good_reps = 0
+        self.rep_count = 0          # total all rounds
+        self._round_number = 0
+        self._round_rep_count = 0
+        self._round_frames: list[dict] = []
+        self._all_rounds: list[dict] = []
+        self._angle_stats: dict = {}
         self._started_at = time.time()
+        self._state = "instructions"  # instructions|countdown|exercise|feedback
+        self._state_wall_start = time.time()
+        self._countdown_last: Optional[int] = None
+        self._feedback_emitted = False
         self._load_module(module_code)
 
     def _load_module(self, code: str):
         namespace = {"__builtins__": SAFE_BUILTINS}
         exec(code, namespace)
-        self._analyze_frame = namespace["analyze_frame"]
         self._detect_rep = namespace["detect_rep"]
-        self._on_rep_complete = namespace["on_rep_complete"]
+        self._generate_round_feedback = namespace["generate_round_feedback"]
+        self._get_session_summary = namespace.get("get_session_summary")
+        self._get_instructions = namespace.get("get_instructions")
+        self._reset_round = namespace.get("reset_round")
+
+    def get_instructions(self) -> list[str]:
+        if self._get_instructions:
+            try:
+                return list(self._get_instructions())
+            except Exception:
+                return []
+        return []
+
+    def start_countdown(self):
+        """Called by view when instructions speech is done."""
+        self._state = "countdown"
+        self._state_wall_start = time.time()
+        self._countdown_last = None
+
+    def end_feedback(self):
+        """Called by view when feedback speech is done."""
+        self._state = "countdown"
+        self._state_wall_start = time.time()
+        self._countdown_last = None
 
     def process_frame(self, pose_data: dict) -> dict:
-        feedback = self._analyze_frame(pose_data)
-        highlight_joints = {f["joint"] for f in feedback if f.get("joint")}
+        # Track angle stats (skip zeros and tiny values)
+        for key, val in pose_data.items():
+            if key in ("timestamp", "keypoints"):
+                continue
+            if isinstance(val, (int, float)) and val > 5.0:
+                if key not in self._angle_stats:
+                    self._angle_stats[key] = {"min": float(val), "max": float(val)}
+                else:
+                    if val < self._angle_stats[key]["min"]:
+                        self._angle_stats[key]["min"] = float(val)
+                    if val > self._angle_stats[key]["max"]:
+                        self._angle_stats[key]["max"] = float(val)
 
-        for msg in feedback:
-            self._feedback_log.append({
-                "timestamp": pose_data.get("timestamp", 0.0),
-                "message": msg["message"],
-            })
-
-        if self._rep_start_time is None:
-            self._rep_start_time = pose_data.get("timestamp", 0.0)
-        self._rep_frames.append(pose_data)
-
-        rep_completed = bool(self._detect_rep(pose_data))
-        post_rep_feedback = []
-
-        if rep_completed:
-            self.rep_count += 1
-            rep_data = {
-                "rep_number": self.rep_count,
-                "frames": list(self._rep_frames),
-                "duration_seconds": (
-                    pose_data.get("timestamp", 0.0) - self._rep_start_time
-                ),
-            }
-            post_rep_feedback = self._on_rep_complete(rep_data)
-            is_good = all(
-                f.get("message", "").lower().startswith(("great", "good", "perfect", "well"))
-                for f in post_rep_feedback
-            ) or len(post_rep_feedback) == 0
-            if is_good:
-                self._good_reps += 1
-            for msg in post_rep_feedback:
-                self._feedback_log.append({
-                    "timestamp": pose_data.get("timestamp", 0.0),
-                    "message": f"[Rep {self.rep_count}] {msg['message']}",
-                })
-            self._rep_frames = []
-            self._rep_start_time = None
-
-        return {
-            "feedback": feedback,
-            "rep_completed": rep_completed,
-            "post_rep_feedback": post_rep_feedback,
-            "rep_count": self.rep_count,
-            "highlight_joints": highlight_joints,
+        elapsed = time.time() - self._state_wall_start
+        result = {
+            "state": self._state,
+            "round_number": self._round_number,
+            "round_rep_count": self._round_rep_count,
+            "total_reps": self.rep_count,
+            "time_remaining": 0.0,
+            "countdown_speak": None,   # int (1-5) or 0 for "Go!" — view speaks it
+            "feedback_lines": None,    # list[str], non-None only on first frame of feedback
+            "highlight_joints": set(),
         }
 
+        if self._state == "instructions":
+            pass  # view handles instruction speech and calls start_countdown()
+
+        elif self._state == "countdown":
+            remaining = COUNTDOWN_SECS - elapsed
+            count_num = max(0, math.ceil(remaining))
+            if count_num != self._countdown_last:
+                self._countdown_last = count_num
+                result["countdown_speak"] = count_num  # 0 means "Go!"
+            result["time_remaining"] = max(0.0, remaining)
+            if elapsed >= COUNTDOWN_SECS + 0.5:
+                self._enter_exercise()
+                result["state"] = "exercise"
+
+        elif self._state == "exercise":
+            time_left = EXERCISE_SECS - elapsed
+            result["time_remaining"] = max(0.0, time_left)
+            self._round_frames.append(pose_data)
+            try:
+                if bool(self._detect_rep(pose_data)):
+                    self._round_rep_count += 1
+                    self.rep_count += 1
+            except Exception as e:
+                print(f"[session] detect_rep error: {e}")
+            result["round_rep_count"] = self._round_rep_count
+            result["total_reps"] = self.rep_count
+            if elapsed >= EXERCISE_SECS:
+                feedback = self._enter_feedback()
+                result["feedback_lines"] = feedback
+                result["state"] = "feedback"
+                self._feedback_emitted = True
+
+        elif self._state == "feedback":
+            if not self._feedback_emitted:
+                # Shouldn't happen but guard anyway
+                pass
+
+        result["state"] = self._state
+        return result
+
+    def _enter_exercise(self):
+        self._state = "exercise"
+        self._state_wall_start = time.time()
+        self._round_number += 1
+        self._round_rep_count = 0
+        self._round_frames = []
+        self._feedback_emitted = False
+        if self._reset_round:
+            try:
+                self._reset_round()
+            except Exception:
+                pass
+
+    def _enter_feedback(self) -> list[str]:
+        self._state = "feedback"
+        self._state_wall_start = time.time()
+        round_data = {
+            "round_number": self._round_number,
+            "rep_count": self._round_rep_count,
+            "frames": list(self._round_frames),
+            "duration_seconds": EXERCISE_SECS,
+        }
+        self._all_rounds.append(round_data)
+        try:
+            lines = self._generate_round_feedback(round_data)
+            return list(lines) if lines else ["Round complete."]
+        except Exception as e:
+            print(f"[session] generate_round_feedback error: {e}")
+            return ["Round complete."]
+
+    def get_session_summary_speech(self) -> str:
+        if not self._get_session_summary:
+            return ""
+        session_data = {
+            "total_reps": self.rep_count,
+            "rounds": list(self._all_rounds),
+            "duration_seconds": time.time() - self._started_at,
+            "angle_stats": dict(self._angle_stats),
+        }
+        try:
+            return str(self._get_session_summary(session_data))
+        except Exception:
+            return ""
+
     def get_summary(self) -> dict:
-        quality_pct = (self._good_reps / self.rep_count * 100) if self.rep_count > 0 else 0
         return {
             "rep_count": self.rep_count,
-            "quality_pct": round(quality_pct),
-            "feedback_log": list(self._feedback_log),
+            "quality_pct": 0,
+            "feedback_log": [],
             "duration_seconds": time.time() - self._started_at,
         }

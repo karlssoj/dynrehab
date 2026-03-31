@@ -8,152 +8,442 @@ from physio_app.services.exercise_service import ExerciseService
 _POSE_DATA_DESCRIPTION = """\
 The `pose_data` dict has these fields (all angles in degrees, calculated in 3D using x,y,z):
   timestamp: float — seconds since session start
-  left_knee_angle / right_knee_angle — hip-knee-ankle angle; ~170° standing, ~90° deep squat
-  left_hip_angle / right_hip_angle — shoulder-hip-knee angle; ~180° standing
+  left_knee_angle / right_knee_angle — raw 3-point angle; ~170° standing, ~90° deep squat
+  left_hip_angle / right_hip_angle — raw 3-point angle; ~180° standing, ~90° hip flexion
   left_ankle_angle / right_ankle_angle — knee-ankle-foot_index angle
   left_shoulder_angle / right_shoulder_angle — elbow-shoulder-hip angle
-  left_elbow_angle / right_elbow_angle — shoulder-elbow-wrist angle
+  left_elbow_angle / right_elbow_angle — raw 3-point angle; ~180° straight, ~45° fully bent
+    (3D; noisy on side view — prefer 2D keypoint calculation for side-view exercises)
   left_wrist_angle / right_wrist_angle — elbow-wrist-index_finger angle
   trunk_lean_angle — trunk from vertical; 0°=upright, increases when leaning forward
+    (3D; noisy on side view — prefer _trunk_lean_2d() computed from keypoints x,y only)
   neck_angle — angle at shoulder-midpoint between trunk direction and nose
   pelvic_tilt — left-hip→right-hip line from horizontal; 0°=level
   left_hka_alignment / right_hka_alignment — frontal-plane hip-knee-ankle angle; ~180°=straight
+  left_arm_elevation / right_arm_elevation — angle at the shoulder between the shoulder-hip line and the shoulder-wrist line; 0°=arm hanging at side, 90°=arm horizontal, 180°=arm straight overhead. Use this for shoulder flexion/extension/abduction exercises.
   keypoints: dict[str, tuple[float,float,float,float]] — name→(x,y,z,visibility)
     x,y in [0,1] (y increases downward), z=depth, visibility in [0,1]
     landmark names: nose, left_shoulder, right_shoulder, left_elbow, right_elbow,
     left_wrist, right_wrist, left_hip, right_hip, left_knee, right_knee,
     left_ankle, right_ankle, left_foot_index, right_foot_index, left_heel, right_heel
+
+ANGLE CONVENTION (use this consistently across ALL exercises):
+  0° = fully straight / fully extended joint
+  Higher values = more bent / more flexed
+  This means: for elbow, knee, hip — compute BEND AMOUNT = 180° − raw_angle.
+  Example: raw knee angle 90° → knee_bend = 180 − 90 = 90° (deeply bent).
+           raw knee angle 170° → knee_bend = 180 − 170 = 10° (nearly straight).
+  The _elbow_bend_2d helper in the example already uses this convention.
+  Always write helpers for other joints the same way: 0=straight, higher=more bent.
 """
 
 _FUNCTION_SPEC = """\
-Implement exactly these three functions:
+Implement exactly these five functions (three required, two optional):
 
-def analyze_frame(pose_data: dict) -> list[dict]:
-    # Called every frame (~30 FPS). Return feedback dicts or [].
-    # Each dict: {"message": str, "joint": str | None}
-    # "joint" is a landmark name to highlight (e.g. "left_knee") or None.
-    # IMPORTANT: use a module-level _last_feedback_at = 0.0 variable and
-    # pose_data["timestamp"] to throttle — only emit feedback if at least
-    # _FEEDBACK_COOLDOWN seconds have passed since the last emission.
-    # This prevents the same message from firing 30 times per second.
+def get_instructions() -> list[str]:
+    # OPTIONAL. Return 1-2 short sentences that tell the patient:
+    # (1) how to stand relative to the camera, and (2) what movement to do.
+    # Keep it brief — it is spoken aloud immediately before the countdown starts.
 
 def detect_rep(pose_data: dict) -> bool:
-    # Called every frame. Return True exactly once when a full rep is completed.
-    # Use module-level state variables to track the rep phase.
-    # For exercises where a joint moves away from resting and then returns,
-    # the two phase transitions use OPPOSITE comparisons:
-    #   Phase 1 complete: angle crosses threshold in movement direction (e.g. <= BEND_THRESHOLD)
-    #   Phase 2 complete: angle returns past a separate EXTEND_THRESHOLD  (e.g. >= EXTEND_THRESHOLD)
-    # NEVER use <= small_value to detect a return-to-extension.
-    # The return phase ends when the angle rises back ABOVE a large threshold (~160°+).
+    # REQUIRED. Called every frame during the 10-second exercise window.
+    # Return True exactly once when a complete rep is detected. Silent — no feedback.
+    # Use LOOSE thresholds — count any recognizable attempt at the motion.
+    # A patient with poor form must still get reps counted so generate_round_feedback
+    # can give specific guidance.
+    # Use a simple phase state machine: ready → moving → ready.
+    # For exercises where a joint moves away from rest and returns:
+    #   Phase "moving" starts when angle crosses threshold in movement direction
+    #   Rep counted when angle returns past a separate return threshold
+    # Use module-level variables for phase state. reset_round() resets them.
 
-def on_rep_complete(rep_data: dict) -> list[dict]:
-    # Called once after detect_rep returns True.
-    # rep_data: {"rep_number": int, "frames": list[dict], "duration_seconds": float}
-    # Return feedback dicts or [].
-    # Use separate if statements (NOT elif) for independent quality checks —
-    # the patient may need feedback on both insufficient bend AND insufficient extension.
+def reset_round():
+    # OPTIONAL. Reset detect_rep state variables before each new exercise window.
+    # Reset phase back to "ready" or "start", clear any history deques, etc.
+
+def generate_round_feedback(round_data: dict) -> list[str]:
+    # REQUIRED. Called once after each 10-second exercise window.
+    # round_data: {
+    #   "round_number": int,
+    #   "rep_count": int,
+    #   "frames": list[dict],       # pose_data frames collected during exercise window
+    #   "duration_seconds": float
+    # }
+    # Return 2-4 spoken sentences as a list of strings.
+    # - If rep_count is 0, give specific guidance about what the patient needs to do.
+    #   Use frame data to diagnose WHY no reps were counted.
+    # - Otherwise: acknowledge reps, give one positive, fix the most important issue.
+    # - Give verbal coaching cues a physiotherapist would say out loud.
+    #   Describe movement quality in plain language ("bend your arms more",
+    #   "lean further forward", "snap back upright between each rep").
+    #   Do NOT say raw angle values to the patient — they mean nothing to them.
+    # - Use separate if statements (NOT elif) for independent quality checks.
+    # - Keep each sentence concise — they will be spoken aloud.
+
+def get_session_summary(session_data: dict) -> str:
+    # REQUIRED. Called once when the patient ends the session.
+    # session_data: {
+    #   "total_reps": int,
+    #   "rounds": [{"round_number": int, "rep_count": int, "frames": list[dict],
+    #               "duration_seconds": float}, ...],
+    #   "duration_seconds": float,
+    #   "angle_stats": {angle_name: {"min": float, "max": float}, ...}
+    # }
+    # "angle_stats" has the min and max of every angle seen across the whole session.
+    # REQUIREMENTS:
+    # - Only report on joints clinically relevant to THIS exercise.
+    # - Use angle_stats to determine what quality level the patient reached, but
+    #   phrase all feedback as verbal coaching — no raw degree values.
+    # - If total_reps is 0, explain what the patient should do differently.
+    # - Ignore any angle_stats entry whose "min" < 10.0 — it is a detection artifact.
+    # - Return a single string, 2-4 sentences maximum.
 """
 
 _FEW_SHOT = """\
-Example 1 — Side-view bicep curl:
+Example — skiing double-pole from the side (tested pattern; follow its structure closely):
 
 ```python
-_phase = "down"
-_CURL_UP = 60        # angle at peak curl (arm bent)
-_CURL_DOWN = 150     # angle at full extension — use >= to detect the return
-_last_feedback_at = 0.0
-_FEEDBACK_COOLDOWN = 4.0
+import math
+import statistics
 
-def analyze_frame(pose_data):
-    global _last_feedback_at
-    now = pose_data.get("timestamp", 0.0)
-    feedback = []
-    if pose_data["left_shoulder_angle"] < 160:
-        if now - _last_feedback_at >= _FEEDBACK_COOLDOWN:
-            feedback.append({"message": "Keep your upper arm still", "joint": "left_shoulder"})
-            _last_feedback_at = now
-    return feedback
+# ── thresholds ────────────────────────────────────────────────────────────────
+_HINGE_START   = 20    # trunk_lean_angle > this → hinge begins
+_HINGE_PEAK    = 40    # trunk_lean_angle >= this → counts as a real stroke
+_HINGE_IDEAL   = 50    # trunk_lean_angle >= this → excellent depth
+_RETURN        = 15    # trunk_lean_angle <= this → upright again
+_HYSTERESIS    = 10    # trunk must drop this much from peak before "extending"
+_ELBOW_IDEAL   = 40    # elbow_bend_approx >= this → good arm position
+_ARM_RAISE     = 50    # arm_elevation >= this → arms raised high enough
+_VIS_THRESHOLD = 0.35  # minimum MediaPipe visibility to trust a joint
+
+# ── module-level rep detection state ─────────────────────────────────────────
+_phase         = "ready"   # "ready" | "hinging" | "extending"
+_max_trunk     = 0.0
+_max_elbow     = 0.0
+_peak_reached  = False
+_rep_frames    = []        # frames for the current in-progress rep
+
+
+def _pick_side(keypoints):
+    lv = keypoints.get("left_shoulder",  (0, 0, 0, 0))[3]
+    rv = keypoints.get("right_shoulder", (0, 0, 0, 0))[3]
+    return "left" if lv >= rv else "right"
+
+
+def _joints_visible(keypoints, side):
+    for part in ("shoulder", "hip", "knee", "elbow"):
+        kp = keypoints.get(f"{side}_{part}")
+        if kp is None or kp[3] < _VIS_THRESHOLD:
+            return False
+    return True
+
+
+def _angle_2d(ax, ay, bx, by, cx, cy):
+    # Angle at B in the x-y plane. Returns degrees; 180 = straight.
+    vax, vay = ax - bx, ay - by
+    vcx, vcy = cx - bx, cy - by
+    mag = math.hypot(vax, vay) * math.hypot(vcx, vcy)
+    if mag < 1e-10:
+        return 180.0
+    return math.degrees(math.acos(max(-1.0, min(1.0, (vax*vcx + vay*vcy) / mag))))
+
+
+def _elbow_bend_2d(pose_data, side):
+    # Use x,y only — immune to MediaPipe z-depth noise on side-view exercises.
+    # Returns bend amount: 0 = straight arm, higher = more bent.
+    kpts = pose_data.get("keypoints", {})
+    s = kpts.get(f"{side}_shoulder")
+    e = kpts.get(f"{side}_elbow")
+    w = kpts.get(f"{side}_wrist")
+    if not (s and e and w) or min(s[3], e[3], w[3]) < _VIS_THRESHOLD:
+        return 0.0
+    return 180.0 - _angle_2d(s[0], s[1], e[0], e[1], w[0], w[1])
+
+
+def _trunk_lean_2d(pose_data, side):
+    # Trunk forward lean using x,y only — immune to MediaPipe z-depth noise.
+    # Returns degrees from vertical: 0=upright, increases when leaning forward.
+    # Always prefer this over pose_data["trunk_lean_angle"] for side-view exercises.
+    kpts = pose_data.get("keypoints", {})
+    sh = kpts.get(f"{side}_shoulder")
+    h  = kpts.get(f"{side}_hip")
+    if not (sh and h) or min(sh[3], h[3]) < _VIS_THRESHOLD:
+        return pose_data.get("trunk_lean_angle", 0.0)
+    dx = sh[0] - h[0]
+    dy = sh[1] - h[1]  # negative when upright (shoulder above hip in image)
+    dist = math.hypot(dx, dy)
+    if dist < 1e-10 or dy >= 0:
+        return 0.0
+    return math.degrees(math.acos(max(-1.0, min(1.0, -dy / dist))))
+
+
+def get_instructions():
+    return [
+        "Stand side-on to the camera so your full body is visible.",
+        "When the countdown ends, perform double pole skiing movements — raise your arms high and crunch forward.",
+    ]
+
 
 def detect_rep(pose_data):
-    global _phase
-    avg = (pose_data["left_elbow_angle"] + pose_data["right_elbow_angle"]) / 2
-    if _phase == "down" and avg <= _CURL_UP:       # angle DECREASES into the curl
-        _phase = "up"
-    elif _phase == "up" and avg >= _CURL_DOWN:     # angle INCREASES back to extension
-        _phase = "down"
-        return True
+    global _phase, _max_trunk, _max_elbow, _peak_reached, _rep_frames
+
+    kpts = pose_data.get("keypoints", {})
+    side = _pick_side(kpts)
+
+    if not _joints_visible(kpts, side):
+        return False
+
+    trunk  = _trunk_lean_2d(pose_data, side)
+    elbow  = _elbow_bend_2d(pose_data, side)
+
+    if _phase == "ready":
+        if trunk > _HINGE_START:
+            _phase       = "hinging"
+            _max_trunk   = trunk
+            _max_elbow   = elbow
+            _peak_reached = False
+            _rep_frames  = [pose_data]
+
+    elif _phase == "hinging":
+        _rep_frames.append(pose_data)
+        if trunk > _max_trunk:
+            _max_trunk = trunk
+        if elbow > _max_elbow:
+            _max_elbow = elbow
+        if not _peak_reached and trunk >= _HINGE_PEAK:
+            _peak_reached = True
+        if trunk < _max_trunk - _HYSTERESIS:
+            _phase = "extending"
+
+    elif _phase == "extending":
+        _rep_frames.append(pose_data)
+        if trunk <= _RETURN:
+            _phase = "ready"
+            if _peak_reached:
+                _rep_frames = []
+                return True
+            _rep_frames = []
+
     return False
 
-def on_rep_complete(rep_data):
-    frames = rep_data["frames"]
-    min_elbow = min(f["left_elbow_angle"] for f in frames)
-    max_elbow = max(f["left_elbow_angle"] for f in frames)
-    feedback = []
-    if min_elbow > 70:
-        feedback.append({"message": "Curl higher for full range of motion", "joint": None})
-    if max_elbow < 140:                            # separate if, NOT elif
-        feedback.append({"message": "Fully extend your arm at the bottom", "joint": None})
-    if not feedback:
-        feedback.append({"message": "Great curl!", "joint": None})
-    return feedback
-```
 
-Example 2 — Side-view knee bend (angle decreases into bend, increases on return):
+def reset_round():
+    global _phase, _max_trunk, _max_elbow, _peak_reached, _rep_frames
+    _phase        = "ready"
+    _max_trunk    = 0.0
+    _max_elbow    = 0.0
+    _peak_reached = False
+    _rep_frames   = []
 
-```python
-_phase = "up"
-_BEND_THRESHOLD = 100    # knee angle at deepest bend — phase switches when <= this
-_EXTEND_THRESHOLD = 160  # knee angle at full extension — phase switches when >= this (NOT a small value)
-_last_feedback_at = 0.0
-_FEEDBACK_COOLDOWN = 4.0
 
-def analyze_frame(pose_data):
-    global _last_feedback_at
-    now = pose_data.get("timestamp", 0.0)
-    feedback = []
-    if pose_data.get("trunk_lean_angle", 0) > 30:
-        if now - _last_feedback_at >= _FEEDBACK_COOLDOWN:
-            feedback.append({"message": "Keep your back straight", "joint": None})
-            _last_feedback_at = now
-    return feedback
+def generate_round_feedback(round_data):
+    rep_count = round_data.get("rep_count", 0)
+    frames    = round_data.get("frames", [])
 
-def detect_rep(pose_data):
-    global _phase
-    angle = pose_data.get("left_knee_angle", 180)
-    if _phase == "up" and angle <= _BEND_THRESHOLD:       # angle DECREASES into bend
-        _phase = "down"
-    elif _phase == "down" and angle >= _EXTEND_THRESHOLD: # angle INCREASES back up
-        _phase = "up"
-        return True
-    return False
+    if not frames:
+        return ["I couldn't see you. Make sure your full body is visible side-on to the camera."]
 
-def on_rep_complete(rep_data):
-    frames = rep_data["frames"]
-    min_knee = min(f.get("left_knee_angle", 180) for f in frames)
-    max_knee = max(f.get("left_knee_angle", 180) for f in frames)
-    feedback = []
-    if min_knee > _BEND_THRESHOLD:
-        feedback.append({"message": f"Bend deeper — reached {min_knee:.0f}°, aim for {_BEND_THRESHOLD}°", "joint": None})
-    if max_knee < _EXTEND_THRESHOLD:               # separate if, NOT elif
-        feedback.append({"message": f"Straighten more — reached {max_knee:.0f}°, aim for {_EXTEND_THRESHOLD}°", "joint": None})
-    if not feedback:
-        feedback.append({"message": "Great rep!", "joint": None})
-    return feedback
+    kpts = frames[0].get("keypoints", {})
+    side = _pick_side(kpts)
+
+    trunk_vals = [_trunk_lean_2d(f, side) for f in frames]
+    elbow_vals = [_elbow_bend_2d(f, side) for f in frames]
+    arm_vals   = [f.get(f"{side}_arm_elevation", 0.0) for f in frames]
+
+    trunk_range = max(trunk_vals) - min(trunk_vals) if trunk_vals else 0.0
+    peak_trunk  = max(trunk_vals) if trunk_vals else 0.0
+    med_elbow   = statistics.median(elbow_vals) if elbow_vals else 0.0
+    max_arm     = max(arm_vals) if arm_vals else 0.0
+
+    lines = []
+
+    if rep_count == 0:
+        lines.append("No complete reps were detected that round.")
+        if trunk_range < 10.0:
+            lines.append(
+                "It looks like you didn't move much. "
+                "Crunch your upper body forward and snap back upright for each stroke."
+            )
+        elif peak_trunk < _HINGE_PEAK:
+            lines.append(
+                "You leaned forward but not enough to count as a rep. "
+                "Drive your chest further toward your knees."
+            )
+        else:
+            lines.append(
+                "You leaned forward but didn't return fully upright between strokes. "
+                "Snap back tall after each pole push so the rep counts."
+            )
+        return lines
+
+    rep_word = "rep" if rep_count == 1 else "reps"
+    lines.append(f"Good effort — you completed {rep_count} {rep_word}.")
+
+    if peak_trunk >= _HINGE_IDEAL:
+        lines.append("Your forward crunch was deep and powerful — great technique.")
+    else:
+        lines.append(
+            "You could lean forward more during the stroke — "
+            "drive your chest closer to your thighs for more power."
+        )
+
+    if med_elbow >= _ELBOW_IDEAL:
+        lines.append("Good arm position — your elbows were nicely bent as strong levers.")
+    else:
+        lines.append(
+            "Keep your elbows more bent during the stroke — "
+            "they should act as stiff levers, not loose and extended."
+        )
+
+    if max_arm >= _ARM_RAISE:
+        lines.append("You raised your arms high, giving a full powerful arc — well done.")
+    else:
+        lines.append(
+            "Raise your arms higher before each stroke — hands up to forehead level "
+            "for a full arc and more power."
+        )
+
+    return lines
+
+
+def get_session_summary(session_data):
+    total_reps = session_data.get("total_reps", 0)
+    stats      = session_data.get("angle_stats", {})
+
+    peak_trunk = stats.get("trunk_lean_angle", {}).get("max", 0.0)
+    l_arm      = stats.get("left_arm_elevation",  {}).get("max", 0.0)
+    r_arm      = stats.get("right_arm_elevation", {}).get("max", 0.0)
+    best_arm   = max(l_arm, r_arm)
+
+    parts = []
+
+    if total_reps == 0:
+        parts.append("No complete double-pole reps were recorded this session.")
+        if peak_trunk < _HINGE_PEAK:
+            parts.append(
+                "Focus on leaning your upper body further forward — "
+                "drive your chest down toward your knees on each stroke."
+            )
+        return " ".join(parts)
+
+    rep_word = "rep" if total_reps == 1 else "reps"
+    parts.append(f"Session complete — you performed {total_reps} {rep_word} across all rounds.")
+
+    if peak_trunk >= _HINGE_IDEAL:
+        parts.append("Your forward lean was excellent — really powerful technique throughout.")
+    elif peak_trunk > 10.0:
+        parts.append(
+            "Work on leaning further forward during each stroke — "
+            "drive your chest closer to your knees for more power."
+        )
+
+    if best_arm >= _ARM_RAISE:
+        parts.append("Good arm height — you raised your arms high before each stroke.")
+    elif best_arm > 10.0:
+        parts.append(
+            "Try to raise your arms higher before each stroke — "
+            "hands up to forehead level so you get a full powerful arc."
+        )
+
+    return " ".join(parts)
 ```
 """
 
 
+_DECREASING_ANGLE_JOINTS = {
+    "left_elbow_angle", "right_elbow_angle",
+    "left_knee_angle", "right_knee_angle",
+    "left_hip_angle", "right_hip_angle",
+}
+_BENDING_JOINT_MIN_RANGE = 60  # degrees — below this the demo likely didn't show full range
+
+
 def _format_reference_data(reference_data: dict) -> str:
-    lines = ["Reference movement data (measured from therapist's demo video):"]
-    for joint, stats in sorted(reference_data.items()):
+    # Sort by range descending so the most active joints appear first
+    sorted_joints = sorted(reference_data.items(), key=lambda kv: kv[1]["range"], reverse=True)
+    lines = [
+        "REFERENCE VIDEO ANALYSIS",
+        "========================",
+        "The therapist recorded a demo of the exact movement the patient should perform.",
+        "Pose estimation was run on that video to measure which joints moved and how much.",
+        "The joints below are listed from most active to least active.",
+        "Joints NOT listed barely moved — they are not part of this exercise.",
+        "",
+        "Use this data to understand the exercise biomechanics and set your thresholds:",
+        "",
+    ]
+    warnings = []
+    for joint, stats in sorted_joints:
+        rng = stats["range"]
+        mn  = stats["min"]
+        mx  = stats["max"]
+        note = ""
+        if joint in _DECREASING_ANGLE_JOINTS:
+            # Convert to bend convention (0=straight) for bending joints
+            bend_min = round(180 - mx)  # raw max → least bend
+            bend_max = round(180 - mn)  # raw min → most bend
+            suffix = f"  (bend: {bend_min}-{bend_max} deg, 0=straight convention)"
+            if rng < _BENDING_JOINT_MIN_RANGE:
+                note = (
+                    f"  *** WARNING: bend range only {rng:.0f}° — demo likely did NOT show full range. "
+                    f"Use clinical defaults instead (see below). ***"
+                )
+                warnings.append((joint, bend_min, bend_max, rng))
+        else:
+            suffix = ""
         lines.append(
-            f"  {joint}: min={stats['min']:.0f}°  max={stats['max']:.0f}°  range={stats['range']:.0f}°"
+            f"  {joint}: min={mn:.0f}°  max={mx:.0f}°  range={rng:.0f}°{suffix}"
         )
+        if note:
+            lines.append(note)
+
     lines += [
         "",
-        "Use these measured values to calibrate your detection thresholds.",
-        "Joints not listed did not move significantly during the demo.",
+        "THRESHOLD CALIBRATION (use bend convention: 0=straight, higher=more bent):",
+        "",
+        "For joints whose value INCREASES with movement (trunk lean, arm elevation, bend amount):",
+        "  'movement started' threshold = min_value + 30% of range",
+        "  'full rep' threshold         = min_value + 60% of range",
+        "",
+        "For bending joints — use the bend values shown above (180 − raw_angle):",
+        "  'movement started' = bend_min + 30% of bend_range",
+        "  'full rep'         = bend_min + 60% of bend_range",
+        "",
+    ]
+
+    if warnings:
+        lines += [
+            "*** INCOMPLETE DEMO OVERRIDE ***",
+            "The following bending joints had a suspiciously small range — the demo video",
+            "did not show the full movement. Use these CLINICAL defaults (bend convention) instead:",
+        ]
+        for joint, bend_min, bend_max, rng in warnings:
+            if "elbow" in joint:
+                lines.append(
+                    f"  {joint}: ignore reference (only {rng:.0f}° range). "
+                    f"Use: 'movement started' at ~30° bend, 'full bend' at ~80° bend."
+                )
+            elif "knee" in joint:
+                lines.append(
+                    f"  {joint}: ignore reference (only {rng:.0f}° range). "
+                    f"Use: 'movement started' at ~25° bend, 'full bend' at ~80° bend."
+                )
+            elif "hip" in joint:
+                lines.append(
+                    f"  {joint}: ignore reference (only {rng:.0f}° range). "
+                    f"Use: 'movement started' at ~20° bend, 'full bend' at ~80° bend."
+                )
+        lines.append("")
+
+    lines += [
+        "FEEDBACK LABEL ACCURACY:",
+        "  The verbal feedback you generate must match the actual thresholds.",
+        "  - 'hand close to shoulder' requires elbow bend threshold ~80°+ (very bent).",
+        "  - 'deep squat' / 'deep bend' requires knee bend threshold ~80°+.",
+        "  - Do NOT praise an achievement the threshold does not actually require.",
+        "",
+        "Do NOT change which angles you use as the primary detection signal — follow the",
+        "example's structural pattern (trunk_lean_2d for forward-lean exercises, etc.).",
     ]
     return "\n".join(lines)
 
@@ -173,16 +463,20 @@ Physiotherapist instructions:
 {instructions}
 
 Available pose data fields:
-{_POSE_DATA_DESCRIPTION}{ref_section}
+{_POSE_DATA_DESCRIPTION}
 {_FEW_SHOT}
 
-Now generate the analysis module for '{exercise_name}' following the same structure.
-
+Now generate the analysis module for '{exercise_name}' following the same structure as the example above.
+{ref_section}
 {_FUNCTION_SPEC}
 
 Rules:
-- Only import math or statistics if needed. Do NOT import os, sys, subprocess, socket, or requests.
-- Use module-level variables for state (rep phase tracking etc.).
+- Only import math, statistics, collections, itertools, or functools if needed. Do NOT import os, sys, subprocess, socket, or requests.
+- Use module-level variables for state (rep phase tracking, etc.).
+- Implement get_instructions, detect_rep, reset_round, generate_round_feedback, and get_session_summary. The required functions are detect_rep, generate_round_feedback, and get_session_summary.
+- All spoken feedback must use plain verbal coaching language — never say raw angle values to the patient.
+- For side-view exercises, compute elbow/hip/knee bend AND trunk lean from keypoints x,y only (like _elbow_bend_2d and _trunk_lean_2d in the example). Do NOT use left/right_elbow_angle, left/right_hip_angle, or trunk_lean_angle directly — they are 3D and z-depth noise inflates them in side view.
+- Use a CONSISTENT angle convention across all helpers: 0° = fully straight, higher = more bent/flexed. Always compute bend amount as (180° − raw_angle) so thresholds are comparable regardless of exercise. E.g. knee_bend_2d = 180 − knee_2d_angle, hip_bend_2d = 180 − hip_2d_angle.
 - Return ONLY valid Python code. No markdown fences. No explanations.
 """
 
@@ -207,17 +501,22 @@ class LLMService:
         prompt = build_prompt(name, camera_view, instructions, reference_data)
         response_text = ""
         status = "failed"
-        try:
-            message = self._client.messages.create(
-                model="claude-sonnet-4-6",
-                max_tokens=2048,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            response_text = message.content[0].text.strip()
-            validation = validate_module(response_text)
-            status = "validated" if validation["valid"] else "failed"
-        except Exception as e:
-            response_text = str(e)
+        for attempt in range(1, 3):
+            try:
+                message = self._client.messages.create(
+                    model="claude-sonnet-4-6",
+                    max_tokens=8192,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                response_text = message.content[0].text.strip()
+                validation = validate_module(response_text)
+                if validation["valid"]:
+                    status = "validated"
+                    break
+                print(f"[llm_service] attempt {attempt} validation failed: {validation['error']}")
+            except Exception as e:
+                print(f"[llm_service] attempt {attempt} API error: {e}")
+                response_text = str(e)
 
         self._log(exercise_id, prompt, response_text)
         return self.ex_svc.save_module(exercise_id, response_text, status)

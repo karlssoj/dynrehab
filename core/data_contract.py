@@ -21,6 +21,8 @@ class PoseFrame:
     pelvic_tilt: float = 0.0
     left_hka_alignment: float = 0.0
     right_hka_alignment: float = 0.0
+    left_arm_elevation: float = 0.0
+    right_arm_elevation: float = 0.0
     keypoints: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:

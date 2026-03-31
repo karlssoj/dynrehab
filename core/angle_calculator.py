@@ -40,6 +40,7 @@ def _vector_to_vertical_angle(a: tuple, b: tuple) -> float:
     return float(np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0))))
 
 
+
 def _vector_to_horizontal_angle(a: tuple, b: tuple) -> float:
     """Angle of vector a→b relative to horizontal axis in the image plane."""
     v = np.array([b[0] - a[0], b[1] - a[1]], dtype=float)
@@ -81,4 +82,6 @@ def calculate_angles(keypoints: dict) -> dict:
         "pelvic_tilt":          _vector_to_horizontal_angle(lm("left_hip"), lm("right_hip")),
         "left_hka_alignment":   _angle_frontal_plane(lm("left_hip"), lm("left_knee"), lm("left_ankle")),
         "right_hka_alignment":  _angle_frontal_plane(lm("right_hip"), lm("right_knee"), lm("right_ankle")),
+        "left_arm_elevation":   _angle_frontal_plane(lm("left_hip"),  lm("left_shoulder"),  lm("left_wrist")),
+        "right_arm_elevation":  _angle_frontal_plane(lm("right_hip"), lm("right_shoulder"), lm("right_wrist")),
     }

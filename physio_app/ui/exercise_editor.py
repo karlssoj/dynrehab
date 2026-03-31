@@ -21,6 +21,7 @@ class ExerciseEditorFrame(ctk.CTkFrame):
         self._original_exercise_id = exercise_id  # track if exercise pre-existed
         self._recorder: VideoRecorder = None
         self._recording = False
+        self._recording_time_left = 0
         self._video_path = None
         self._build()
         if exercise_id:
@@ -99,19 +100,59 @@ class ExerciseEditorFrame(ctk.CTkFrame):
         project_root = Path(__file__).parent.parent.parent
         return str(project_root / "data" / "exercises" / exercise_id / "reference.mp4")
 
+    _COUNTDOWN_SECS = 5
+    _RECORD_SECS    = 10
+
     def _start_recording(self):
         if self.exercise_id is None:
             self.exercise_id = self._save_exercise()
+        self.record_btn.configure(state="disabled")
+        self.stop_btn.configure(state="disabled")
+        self.video_status.configure(text="Get ready…", text_color="#f39c12")
+        self._countdown_tick(self._COUNTDOWN_SECS)
+
+    def _countdown_tick(self, count: int):
+        if count > 0:
+            self.video_label.configure(
+                text=str(count),
+                font=ctk.CTkFont(size=80, weight="bold"),
+                text_color="#00dcff",
+            )
+            self.after(1000, lambda: self._countdown_tick(count - 1))
+        else:
+            self.video_label.configure(
+                text="GO!",
+                font=ctk.CTkFont(size=72, weight="bold"),
+                text_color="#00ff44",
+            )
+            self.after(500, self._begin_recording)
+
+    def _begin_recording(self):
         path = self._get_video_path(self.exercise_id)
         self._recorder = VideoRecorder(path)
         self._recorder.set_preview_callback(self._on_preview_frame)
         self._recorder.start()
         self._recording = True
-        self.record_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
         self.video_status.configure(text="Recording…", text_color="#e74c3c")
+        self._recording_time_left = self._RECORD_SECS
+        self._record_tick()
+        self.after(self._RECORD_SECS * 1000, self._stop_recording)
+
+    def _record_tick(self):
+        if not self._recording:
+            return
+        self.video_status.configure(
+            text=f"Recording… {self._recording_time_left}s remaining",
+            text_color="#e74c3c",
+        )
+        self._recording_time_left -= 1
+        if self._recording_time_left >= 0:
+            self.after(1000, self._record_tick)
 
     def _stop_recording(self):
+        if not self._recording:
+            return  # already stopped (e.g. auto-stop fired after manual stop)
         if self._recorder:
             self._recorder.stop()
             self._recorder = None

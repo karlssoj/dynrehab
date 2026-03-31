@@ -1,7 +1,7 @@
 import ast
 
 BANNED_IMPORTS = {"os", "subprocess", "sys", "shutil", "socket", "requests", "urllib", "http"}
-REQUIRED_FUNCTIONS = {"analyze_frame", "detect_rep", "on_rep_complete"}
+REQUIRED_FUNCTIONS = {"detect_rep", "generate_round_feedback", "get_session_summary"}
 
 
 def validate_module(code: str) -> dict:

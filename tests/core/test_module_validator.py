@@ -1,16 +1,16 @@
 from core.module_validator import validate_module
 
 VALID_CODE = """
-_phase = "down"
-
-def analyze_frame(pose_data):
-    return []
+_phase = "ready"
 
 def detect_rep(pose_data):
     return False
 
-def on_rep_complete(rep_data):
-    return []
+def generate_round_feedback(round_data):
+    return ["Round complete."]
+
+def get_session_summary(session_data):
+    return "Session done."
 """
 
 
@@ -20,25 +20,25 @@ def test_valid_module_passes():
     assert result["error"] is None
 
 
-def test_missing_analyze_frame():
-    code = "def detect_rep(d): return False\ndef on_rep_complete(d): return []"
-    result = validate_module(code)
-    assert result["valid"] is False
-    assert "analyze_frame" in result["error"]
-
-
 def test_missing_detect_rep():
-    code = "def analyze_frame(d): return []\ndef on_rep_complete(d): return []"
+    code = "def generate_round_feedback(d): return []\ndef get_session_summary(d): return ''"
     result = validate_module(code)
     assert result["valid"] is False
     assert "detect_rep" in result["error"]
 
 
-def test_missing_on_rep_complete():
-    code = "def analyze_frame(d): return []\ndef detect_rep(d): return False"
+def test_missing_generate_round_feedback():
+    code = "def detect_rep(d): return False\ndef get_session_summary(d): return ''"
     result = validate_module(code)
     assert result["valid"] is False
-    assert "on_rep_complete" in result["error"]
+    assert "generate_round_feedback" in result["error"]
+
+
+def test_missing_get_session_summary():
+    code = "def detect_rep(d): return False\ndef generate_round_feedback(d): return []"
+    result = validate_module(code)
+    assert result["valid"] is False
+    assert "get_session_summary" in result["error"]
 
 
 def test_banned_import_os():
@@ -62,7 +62,7 @@ def test_banned_from_import():
 
 
 def test_syntax_error():
-    code = "def analyze_frame(: pass"
+    code = "def detect_rep(: pass"
     result = validate_module(code)
     assert result["valid"] is False
     assert "syntax" in result["error"].lower()
@@ -77,13 +77,29 @@ def test_math_import_allowed():
 def test_nested_function_not_accepted():
     code = """
 def wrapper():
-    def analyze_frame(pose_data):
-        return []
     def detect_rep(pose_data):
         return False
-    def on_rep_complete(rep_data):
+    def generate_round_feedback(round_data):
         return []
+    def get_session_summary(session_data):
+        return ""
 """
     result = validate_module(code)
     assert result["valid"] is False
-    assert "analyze_frame" in result["error"]
+    assert "detect_rep" in result["error"]
+
+
+def test_optional_functions_not_required():
+    # get_instructions and reset_round are optional — module should be valid without them
+    code = """
+def detect_rep(pose_data):
+    return False
+
+def generate_round_feedback(round_data):
+    return ["Done."]
+
+def get_session_summary(session_data):
+    return "Summary."
+"""
+    result = validate_module(code)
+    assert result["valid"] is True
