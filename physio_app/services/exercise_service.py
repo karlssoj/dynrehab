@@ -54,11 +54,11 @@ class ExerciseService:
         ).fetchall()
         return [self._row_to_exercise(r) for r in rows]
 
-    def update(self, exercise_id: str, name: str = None, camera_view: str = None,
-               client_instructions: str = None, llm_instructions: str = None,
-               boundary_values: str = None, display_values: str = None,
-               session_duration_secs: int = None,
-               reference_video_path: str = None) -> Exercise:
+    def update(self, exercise_id: str, name: Optional[str] = None, camera_view: Optional[str] = None,
+               client_instructions: Optional[str] = None, llm_instructions: Optional[str] = None,
+               boundary_values: Optional[str] = None, display_values: Optional[str] = None,
+               session_duration_secs: Optional[int] = None,
+               reference_video_path: Optional[str] = None) -> Exercise:
         updates, params = [], []
         for col, val in [
             ("name", name), ("camera_view", camera_view),
@@ -138,7 +138,7 @@ class ExerciseService:
             llm_instructions=d.get("llm_instructions") or "",
             boundary_values=d.get("boundary_values") or "",
             display_values=d.get("display_values") or "",
-            session_duration_secs=int(d.get("session_duration_secs") or 10),
+            session_duration_secs=int(d["session_duration_secs"]) if d.get("session_duration_secs") is not None else 10,
             reference_video_path=d.get("reference_video_path") or "",
             created_at=d.get("created_at") or "",
         )
