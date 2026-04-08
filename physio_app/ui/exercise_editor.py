@@ -18,7 +18,7 @@ class ExerciseEditorFrame(ctk.CTkFrame):
         self.db_conn = db_conn
         self.ex_svc = ExerciseService(db_conn)
         self.exercise_id = exercise_id
-        self._original_exercise_id = exercise_id
+        self._original_exercise_id = exercise_id  # track if exercise pre-existed
         self._recorder: VideoRecorder = None
         self._recording = False
         self._recording_time_left = 0
@@ -41,6 +41,7 @@ class ExerciseEditorFrame(ctk.CTkFrame):
         content.pack(fill="both", expand=True, padx=20)
         content.columnconfigure(0, weight=1)
         content.columnconfigure(1, weight=1)
+        content.rowconfigure(0, weight=1)   # add this line
 
         # Left — scrollable fields
         left = ctk.CTkScrollableFrame(content, fg_color="transparent")
@@ -209,6 +210,8 @@ class ExerciseEditorFrame(ctk.CTkFrame):
         """Read all form fields. Returns dict with all values."""
         try:
             duration = int(self.session_duration_entry.get().strip())
+            if duration <= 0:
+                duration = 10
         except (ValueError, TypeError):
             duration = 10
         return {
@@ -234,13 +237,11 @@ class ExerciseEditorFrame(ctk.CTkFrame):
         return ex.id
 
     def _save_and_generate(self):
+        if not self.name_entry.get().strip():
+            self.status_label.configure(text="Exercise name is required.",
+                                        text_color="#e74c3c")
+            return
         f = self._get_fields()
-        if not f["name"] or f["name"] == "Unnamed Exercise":
-            name_raw = self.name_entry.get().strip()
-            if not name_raw:
-                self.status_label.configure(text="Exercise name is required.",
-                                            text_color="#e74c3c")
-                return
 
         if self.exercise_id:
             self.ex_svc.update(
@@ -253,15 +254,7 @@ class ExerciseEditorFrame(ctk.CTkFrame):
                 session_duration_secs=f["session_duration_secs"],
             )
         else:
-            ex = self.ex_svc.create(
-                f["name"], f["camera_view"],
-                client_instructions=f["client_instructions"],
-                llm_instructions=f["llm_instructions"],
-                boundary_values=f["boundary_values"],
-                display_values=f["display_values"],
-                session_duration_secs=f["session_duration_secs"],
-            )
-            self.exercise_id = ex.id
+            self.exercise_id = self._save_exercise()
 
         self.status_label.configure(text="Generating analysis code…", text_color="white")
         self._save_btn.configure(state="disabled")
@@ -297,6 +290,7 @@ class ExerciseEditorFrame(ctk.CTkFrame):
             self._recorder.stop()
         self._recording = False
         self._recorder = None
+        # Clean up a new exercise created only for recording if it was never completed
         if self._original_exercise_id is None and self.exercise_id is not None:
             if self.ex_svc.get_active_module(self.exercise_id) is None:
                 self.ex_svc.delete(self.exercise_id)
