@@ -76,7 +76,6 @@ class SessionService:
             except Exception:
                 return []
         return []
-        return []
 
     def start_countdown(self):
         """Called by view when instructions speech is done."""

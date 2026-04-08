@@ -24,7 +24,6 @@ def test_session_service_default_exercise_secs():
 
 
 def test_exercise_secs_not_importable_as_constant():
-    import importlib
     import client_app.services.session_service as mod
     assert not hasattr(mod, "EXERCISE_SECS"), \
         "EXERCISE_SECS should be removed — use exercise_secs parameter instead"
