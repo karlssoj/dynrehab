@@ -15,7 +15,12 @@ def test_prompt_contains_all_five_sections():
     assert "Check knee bend depth" in prompt
     assert "Knee must reach 90 degrees" in prompt
     assert "Show left knee angle" in prompt
-    assert "20" in prompt
+    assert "20-second" in prompt
+    assert "Client instructions" in prompt
+    assert "Analysis instructions" in prompt
+    assert "Boundary values" in prompt
+    assert "Display values" in prompt
+    assert "Session duration" in prompt
 
 
 def test_prompt_uses_custom_duration_in_function_spec():

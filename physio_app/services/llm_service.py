@@ -101,9 +101,6 @@ LYING / SEATED / KNEELING exercises:
   bend) because a relaxed lying leg may have 5-15° of apparent bend from soft tissue.
 """
 
-def _build_function_spec(session_duration_secs: int) -> str:
-    return _FUNCTION_SPEC_TEMPLATE.replace("10-second", f"{session_duration_secs}-second")
-
 
 _FUNCTION_SPEC_TEMPLATE = """\
 Implement exactly these five functions (three required, two optional):
@@ -438,6 +435,10 @@ def get_session_summary(session_data):
 """
 
 
+def _build_function_spec(session_duration_secs: int) -> str:
+    return _FUNCTION_SPEC_TEMPLATE.replace("10-second", f"{session_duration_secs}-second")
+
+
 _DECREASING_ANGLE_JOINTS = {
     "left_elbow_angle", "right_elbow_angle",
     "left_knee_angle", "right_knee_angle",
@@ -546,6 +547,7 @@ def build_prompt(exercise_name: str, camera_view: str,
     ref_section = ""
     if reference_data:
         ref_section = "\n" + _format_reference_data(reference_data) + "\n"
+    function_spec = _build_function_spec(session_duration_secs)
     return f"""\
 You are generating a Python movement analysis module for a physiotherapy application.
 
@@ -572,7 +574,7 @@ Available pose data fields:
 
 Now generate the analysis module for '{exercise_name}' following the same structure as the example above.
 {ref_section}
-{_build_function_spec(session_duration_secs)}
+{function_spec}
 
 Rules:
 - Only import math, statistics, collections, itertools, or functools if needed. Do NOT import os, sys, subprocess, socket, or requests.
@@ -610,7 +612,8 @@ class LLMService:
                 reference_data = None
 
         prompt = build_prompt(
-            name, camera_view,
+            exercise_name=name,
+            camera_view=camera_view,
             client_instructions=client_instructions,
             llm_instructions=llm_instructions,
             boundary_values=boundary_values,
