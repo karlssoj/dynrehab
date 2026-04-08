@@ -24,6 +24,7 @@ class SessionViewFrame(ctk.CTkFrame):
         self._feedback_lines: list[str] = []
         self._instructions_spoken = False   # True once instructions TTS has been queued
         self._countdown_triggered = False   # True once start_countdown() has been called
+        self._exercise_secs: int = 0   # set properly in _start_session
         self._build()
         self._start_session()
 

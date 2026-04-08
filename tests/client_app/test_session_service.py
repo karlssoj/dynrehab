@@ -105,7 +105,7 @@ def test_reset_round_called_on_enter_exercise():
 def test_feedback_lines_emitted_when_exercise_ends():
     svc = SessionService(exercise_id="ex1", module_code=VALID_MODULE_CODE)
     svc._enter_exercise()
-    # Force elapsed time beyond EXERCISE_SECS by backdating _state_wall_start
+    # Force elapsed time beyond _exercise_secs (default 10 s) by backdating _state_wall_start
     svc._state_wall_start -= 11  # 11 seconds ago
     result = svc.process_frame({"left_knee_angle": 170.0, "timestamp": 1.0})
     assert result["feedback_lines"] is not None
