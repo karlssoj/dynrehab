@@ -6,7 +6,6 @@ from typing import Optional
 ALLOWED_IMPORT_NAMES = {"math", "statistics", "collections", "itertools", "functools"}
 
 COUNTDOWN_SECS = 5
-EXERCISE_SECS = 10
 
 
 def _make_safe_import():
@@ -36,8 +35,9 @@ SAFE_BUILTINS["__import__"] = _make_safe_import()
 
 
 class SessionService:
-    def __init__(self, exercise_id: str, module_code: str):
+    def __init__(self, exercise_id: str, module_code: str, exercise_secs: int = 10):
         self.exercise_id = exercise_id
+        self._exercise_secs = exercise_secs
         self.rep_count = 0          # total all rounds
         self._round_number = 0
         self._round_rep_count = 0
@@ -59,6 +59,7 @@ class SessionService:
         self._get_session_summary = namespace.get("get_session_summary")
         self._get_instructions = namespace.get("get_instructions")
         self._reset_round = namespace.get("reset_round")
+        self._get_relevant_joints = namespace.get("get_relevant_joints")
 
     def get_instructions(self) -> list[str]:
         if self._get_instructions:
@@ -66,6 +67,15 @@ class SessionService:
                 return list(self._get_instructions())
             except Exception:
                 return []
+
+    def get_relevant_joints(self) -> list:
+        """Returns list of (display_label, pose_data_key) pairs from the module."""
+        if self._get_relevant_joints:
+            try:
+                return list(self._get_relevant_joints())
+            except Exception:
+                return []
+        return []
         return []
 
     def start_countdown(self):
@@ -121,7 +131,7 @@ class SessionService:
                 result["state"] = "exercise"
 
         elif self._state == "exercise":
-            time_left = EXERCISE_SECS - elapsed
+            time_left = self._exercise_secs - elapsed
             result["time_remaining"] = max(0.0, time_left)
             self._round_frames.append(pose_data)
             try:
@@ -132,7 +142,7 @@ class SessionService:
                 print(f"[session] detect_rep error: {e}")
             result["round_rep_count"] = self._round_rep_count
             result["total_reps"] = self.rep_count
-            if elapsed >= EXERCISE_SECS:
+            if elapsed >= self._exercise_secs:
                 feedback = self._enter_feedback()
                 result["feedback_lines"] = feedback
                 result["state"] = "feedback"
@@ -166,7 +176,7 @@ class SessionService:
             "round_number": self._round_number,
             "rep_count": self._round_rep_count,
             "frames": list(self._round_frames),
-            "duration_seconds": EXERCISE_SECS,
+            "duration_seconds": self._exercise_secs,
         }
         self._all_rounds.append(round_data)
         try:
