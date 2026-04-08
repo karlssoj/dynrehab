@@ -72,8 +72,10 @@ class SessionViewFrame(ctk.CTkFrame):
         if module is None:
             self.feedback_label.configure(text="No analysis module found for this exercise.")
             return
+        self._exercise_secs = ex.session_duration_secs
         self._session = SessionService(exercise_id=self.exercise_id,
-                                       module_code=module["code"])
+                                       module_code=module["code"],
+                                       exercise_secs=self._exercise_secs)
         instructions = self._session.get_instructions()
         if instructions:
             # Speak all lines joined as one message so nothing gets drained by the
@@ -166,9 +168,8 @@ class SessionViewFrame(ctk.CTkFrame):
             cv2.putText(display, f"Time left: {max(0.0, time_left):.1f}s",
                         (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
-            from client_app.services.session_service import EXERCISE_SECS
-            elapsed = EXERCISE_SECS - time_left
-            bar_width = int(min(1.0, elapsed / EXERCISE_SECS) * w)
+            elapsed = self._exercise_secs - time_left
+            bar_width = int(min(1.0, elapsed / self._exercise_secs) * w)
             cv2.rectangle(display, (0, h - 8), (bar_width, h), (0, 200, 255), -1)
 
         elif state == "feedback":
