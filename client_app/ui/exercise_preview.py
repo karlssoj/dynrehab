@@ -68,7 +68,7 @@ class ExercisePreviewFrame(ctk.CTkFrame):
         self.title_label.configure(text=ex.name)
         self.view_label.configure(text=f"Camera view: {ex.camera_view}")
         self.instructions_box.configure(state="normal")
-        self.instructions_box.insert("1.0", ex.instructions_text or "(No instructions provided)")
+        self.instructions_box.insert("1.0", ex.client_instructions or "(No instructions provided)")
         self.instructions_box.configure(state="disabled")
         self._video_path = ex.reference_video_path or ""
 

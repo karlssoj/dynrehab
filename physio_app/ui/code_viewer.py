@@ -91,7 +91,13 @@ class CodeViewerFrame(ctk.CTkFrame):
 
         def run():
             module = llm_svc.generate_module(
-                ex.id, ex.name, ex.camera_view, ex.instructions_text)
+                ex.id, ex.name, ex.camera_view,
+                client_instructions=ex.client_instructions,
+                llm_instructions=ex.llm_instructions,
+                boundary_values=ex.boundary_values,
+                display_values=ex.display_values,
+                session_duration_secs=ex.session_duration_secs,
+            )
             self.after(0, lambda: self._on_regen_done(module["status"]))
 
         threading.Thread(target=run, daemon=True).start()
