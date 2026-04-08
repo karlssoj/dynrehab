@@ -18,8 +18,13 @@ The `pose_data` dict has these fields (all angles in degrees, calculated in 3D u
   trunk_lean_angle — trunk from vertical; 0°=upright, increases when leaning forward
     (3D; noisy on side view — prefer _trunk_lean_2d() computed from keypoints x,y only)
   neck_angle — angle at shoulder-midpoint between trunk direction and nose
-  pelvic_tilt — left-hip→right-hip line from horizontal; 0°=level
-  left_hka_alignment / right_hka_alignment — frontal-plane hip-knee-ankle angle; ~180°=straight
+  pelvic_tilt — left-hip→right-hip line from horizontal.
+    WARNING: this field is unreliable for front-facing camera — reads ~180° when level.
+    For frontal exercises compute pelvic tilt from keypoints directly (see helper below).
+  left_hka_alignment / right_hka_alignment — frontal-plane hip-knee-ankle angle; ~180°=straight.
+    WARNING: this is a SCALAR angle — it decreases for BOTH valgus (inward) AND varus (outward).
+    Do NOT use hka_alignment < threshold to detect valgus; it is directionless.
+    For frontal-view valgus detection use the _knee_lateral_deviation helper below instead.
   left_arm_elevation / right_arm_elevation — angle at the shoulder between the shoulder-hip line and the shoulder-wrist line; 0°=arm hanging at side, 90°=arm horizontal, 180°=arm straight overhead. Use this for shoulder flexion/extension/abduction exercises.
   keypoints: dict[str, tuple[float,float,float,float]] — name→(x,y,z,visibility)
     x,y in [0,1] (y increases downward), z=depth, visibility in [0,1]
@@ -35,9 +40,72 @@ ANGLE CONVENTION (use this consistently across ALL exercises):
            raw knee angle 170° → knee_bend = 180 − 170 = 10° (nearly straight).
   The _elbow_bend_2d helper in the example already uses this convention.
   Always write helpers for other joints the same way: 0=straight, higher=more bent.
+
+HELPER PATTERN for knee/hip/ankle bend (use x,y only — immune to z-depth noise):
+  def _knee_bend_2d(pose_data, side):
+      kpts = pose_data.get("keypoints", {})
+      h = kpts.get(f"{side}_hip")
+      k = kpts.get(f"{side}_knee")
+      a = kpts.get(f"{side}_ankle")
+      if not (h and k and a) or min(h[3], k[3], a[3]) < _VIS_THRESHOLD:
+          return 0.0
+      return 180.0 - _angle_2d(h[0], h[1], k[0], k[1], a[0], a[1])
+  # Returns 0 when leg is straight, increases as knee bends.
+  # Same pattern applies for _hip_bend_2d (shoulder, hip, knee) and
+  # _ankle_bend_2d (knee, ankle, foot_index).
+
+HELPER PATTERN for frontal-view pelvic tilt (do not use pose_data["pelvic_tilt"]):
+  def _pelvic_tilt_2d(pose_data):
+      # Returns 0 when hips are level, increases when one hip is higher.
+      # Works regardless of camera mirror mode.
+      kpts = pose_data.get("keypoints", {})
+      lh = kpts.get("left_hip")
+      rh = kpts.get("right_hip")
+      if not (lh and rh) or min(lh[3], rh[3]) < _VIS_THRESHOLD:
+          return 0.0
+      dx = abs(lh[0] - rh[0])
+      dy = abs(lh[1] - rh[1])
+      if dx < 1e-10:
+          return 90.0
+      return math.degrees(math.atan2(dy, dx))
+
+HELPER PATTERN for frontal-view valgus (knee caving inward) detection:
+  Because hka_alignment is directionless, use lateral knee deviation from keypoints:
+
+  def _knee_lateral_deviation(pose_data, side):
+      # Returns positive if knee is MEDIAL (valgus/inward), negative if LATERAL (varus/outward).
+      # Requires front-facing camera. Accounts for the mirror effect: patient's LEFT
+      # appears on the RIGHT side of the image (high x), RIGHT on the left (low x).
+      kpts = pose_data.get("keypoints", {})
+      h = kpts.get(f"{side}_hip")
+      k = kpts.get(f"{side}_knee")
+      a = kpts.get(f"{side}_ankle")
+      if not (h and k and a) or min(h[3], k[3], a[3]) < _VIS_THRESHOLD:
+          return 0.0
+      midpoint_x = (h[0] + a[0]) / 2.0
+      raw = k[0] - midpoint_x
+      # Left leg: inward = lower x in image → negate so positive = inward
+      # Right leg: inward = higher x in image → keep sign
+      return -raw if side == "left" else raw
+
+  # Valgus check: _knee_lateral_deviation(pose_data, "left") > VALGUS_THRESHOLD
+  # A value of 0.02–0.03 (in normalised [0,1] x coords) is a meaningful threshold.
+
+LYING / SEATED / KNEELING exercises:
+  _trunk_lean_2d() ONLY works when the patient is standing upright.
+  For lying, seated, or kneeling exercises it returns ~0 regardless of movement.
+  DO NOT use trunk lean as the primary detection signal for these exercises.
+  Instead, use the bend helper for the joint being exercised (e.g. _knee_bend_2d
+  for lying knee flexion, _elbow_bend_2d for seated arm curl, etc.).
+  For lying exercises, set the 'return to straight' threshold generously (e.g. < 20°
+  bend) because a relaxed lying leg may have 5-15° of apparent bend from soft tissue.
 """
 
-_FUNCTION_SPEC = """\
+def _build_function_spec(session_duration_secs: int) -> str:
+    return _FUNCTION_SPEC_TEMPLATE.replace("10-second", f"{session_duration_secs}-second")
+
+
+_FUNCTION_SPEC_TEMPLATE = """\
 Implement exactly these five functions (three required, two optional):
 
 def get_instructions() -> list[str]:
@@ -70,15 +138,25 @@ def generate_round_feedback(round_data: dict) -> list[str]:
     #   "duration_seconds": float
     # }
     # Return 2-4 spoken sentences as a list of strings.
-    # - If rep_count is 0, give specific guidance about what the patient needs to do.
-    #   Use frame data to diagnose WHY no reps were counted.
-    # - Otherwise: acknowledge reps, give one positive, fix the most important issue.
+    # - ALWAYS run all quality checks (pelvic tilt, knee valgus, trunk lean, etc.)
+    #   regardless of rep_count. Do NOT return early after the rep-count message.
+    # - If rep_count is 0, open with a depth/movement cue, then continue with quality checks.
+    # - If rep_count > 0, open with acknowledgement + depth feedback, then quality checks.
     # - Give verbal coaching cues a physiotherapist would say out loud.
     #   Describe movement quality in plain language ("bend your arms more",
     #   "lean further forward", "snap back upright between each rep").
-    #   Do NOT say raw angle values to the patient — they mean nothing to them.
+    #   By default do NOT say raw angle values — they mean nothing to most patients.
+    #   EXCEPTION: if the physiotherapist's instructions explicitly ask for angle
+    #   values in feedback (e.g. "report the knee angle"), then include them.
     # - Use separate if statements (NOT elif) for independent quality checks.
     # - Keep each sentence concise — they will be spoken aloud.
+
+def get_relevant_joints() -> list:
+    # OPTIONAL. Returns which joint values to display prominently on screen during the session.
+    # Each entry is a (display_label, pose_data_key) pair.
+    # pose_data_key must be a key that exists in the pose_data dict.
+    # Return 1-4 joints — the ones most informative for THIS exercise.
+    # Example: [("Trunk lean", "trunk_lean_angle"), ("L knee", "left_knee_angle")]
 
 def get_session_summary(session_data: dict) -> str:
     # REQUIRED. Called once when the patient ends the session.
@@ -92,8 +170,9 @@ def get_session_summary(session_data: dict) -> str:
     # "angle_stats" has the min and max of every angle seen across the whole session.
     # REQUIREMENTS:
     # - Only report on joints clinically relevant to THIS exercise.
-    # - Use angle_stats to determine what quality level the patient reached, but
-    #   phrase all feedback as verbal coaching — no raw degree values.
+    # - Use angle_stats to determine what quality level the patient reached.
+    #   Phrase feedback as verbal coaching by default — no raw degree values —
+    #   unless the physiotherapist's instructions explicitly request angle values.
     # - If total_reps is 0, explain what the patient should do differently.
     # - Ignore any angle_stats entry whose "min" < 10.0 — it is a detection artifact.
     # - Return a single string, 2-4 sentences maximum.
@@ -306,6 +385,15 @@ def generate_round_feedback(round_data):
     return lines
 
 
+def get_relevant_joints():
+    return [
+        ("Trunk lean", "trunk_lean_angle"),
+        ("L elbow",    "left_elbow_angle"),
+        ("R elbow",    "right_elbow_angle"),
+        ("L arm elev", "left_arm_elevation"),
+    ]
+
+
 def get_session_summary(session_data):
     total_reps = session_data.get("total_reps", 0)
     stats      = session_data.get("angle_stats", {})
@@ -448,7 +536,12 @@ def _format_reference_data(reference_data: dict) -> str:
     return "\n".join(lines)
 
 
-def build_prompt(exercise_name: str, camera_view: str, instructions: str,
+def build_prompt(exercise_name: str, camera_view: str,
+                 client_instructions: str,
+                 llm_instructions: str,
+                 boundary_values: str,
+                 display_values: str,
+                 session_duration_secs: int,
                  reference_data: dict | None = None) -> str:
     ref_section = ""
     if reference_data:
@@ -459,8 +552,19 @@ You are generating a Python movement analysis module for a physiotherapy applica
 Exercise: {exercise_name}
 Camera view: {camera_view}
 
-Physiotherapist instructions:
-{instructions}
+Client instructions (spoken to patient before and during exercise):
+{client_instructions}
+
+Analysis instructions (what to look for and what feedback to give):
+{llm_instructions}
+
+Boundary values (specific thresholds the physiotherapist requires):
+{boundary_values}
+
+Display values (which values to show on screen during motion analysis):
+{display_values}
+
+Session duration: {session_duration_secs} seconds per exercise window
 
 Available pose data fields:
 {_POSE_DATA_DESCRIPTION}
@@ -468,15 +572,18 @@ Available pose data fields:
 
 Now generate the analysis module for '{exercise_name}' following the same structure as the example above.
 {ref_section}
-{_FUNCTION_SPEC}
+{_build_function_spec(session_duration_secs)}
 
 Rules:
 - Only import math, statistics, collections, itertools, or functools if needed. Do NOT import os, sys, subprocess, socket, or requests.
 - Use module-level variables for state (rep phase tracking, etc.).
 - Implement get_instructions, detect_rep, reset_round, generate_round_feedback, and get_session_summary. The required functions are detect_rep, generate_round_feedback, and get_session_summary.
-- All spoken feedback must use plain verbal coaching language — never say raw angle values to the patient.
+- Feedback language: use plain verbal coaching by default. Only include numeric angle values if the physiotherapist's instructions explicitly request them.
 - For side-view exercises, compute elbow/hip/knee bend AND trunk lean from keypoints x,y only (like _elbow_bend_2d and _trunk_lean_2d in the example). Do NOT use left/right_elbow_angle, left/right_hip_angle, or trunk_lean_angle directly — they are 3D and z-depth noise inflates them in side view.
 - Use a CONSISTENT angle convention across all helpers: 0° = fully straight, higher = more bent/flexed. Always compute bend amount as (180° − raw_angle) so thresholds are comparable regardless of exercise. E.g. knee_bend_2d = 180 − knee_2d_angle, hip_bend_2d = 180 − hip_2d_angle.
+- For frontal-view exercises: do NOT use pose_data["pelvic_tilt"] — compute _pelvic_tilt_2d from keypoints instead. Do NOT use hka_alignment < threshold to detect knee valgus — it is a scalar angle that fires for both valgus AND varus. Use _knee_lateral_deviation from keypoints (positive = inward) and only flag valgus when the value is actually positive above a threshold.
+- For lying, seated, or kneeling exercises: do NOT use trunk lean as the primary detection signal. Use the bend helper for the joint being exercised (_knee_bend_2d, _elbow_bend_2d, etc.). Set the 'return to straight' threshold at ~15-20° bend to account for natural resting position noise.
+- Implement get_relevant_joints() returning 1-4 (label, pose_data_key) pairs for the joints most relevant to this exercise. Use keys that exist in pose_data (e.g. "left_knee_angle", "trunk_lean_angle", "left_arm_elevation").
 - Return ONLY valid Python code. No markdown fences. No explanations.
 """
 
@@ -488,7 +595,11 @@ class LLMService:
         self._client = anthropic.Anthropic(api_key=api_key)
 
     def generate_module(self, exercise_id: str, name: str, camera_view: str,
-                        instructions: str) -> dict:
+                        client_instructions: str,
+                        llm_instructions: str,
+                        boundary_values: str,
+                        display_values: str,
+                        session_duration_secs: int) -> dict:
         """Call Claude, validate the result, store it. Returns the saved module dict."""
         reference_data = None
         ex = self.ex_svc.get(exercise_id)
@@ -498,7 +609,15 @@ class LLMService:
             except Exception:
                 reference_data = None
 
-        prompt = build_prompt(name, camera_view, instructions, reference_data)
+        prompt = build_prompt(
+            name, camera_view,
+            client_instructions=client_instructions,
+            llm_instructions=llm_instructions,
+            boundary_values=boundary_values,
+            display_values=display_values,
+            session_duration_secs=session_duration_secs,
+            reference_data=reference_data,
+        )
         response_text = ""
         status = "failed"
         for attempt in range(1, 3):
