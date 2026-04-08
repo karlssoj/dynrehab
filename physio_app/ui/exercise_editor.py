@@ -18,7 +18,7 @@ class ExerciseEditorFrame(ctk.CTkFrame):
         self.db_conn = db_conn
         self.ex_svc = ExerciseService(db_conn)
         self.exercise_id = exercise_id
-        self._original_exercise_id = exercise_id  # track if exercise pre-existed
+        self._original_exercise_id = exercise_id
         self._recorder: VideoRecorder = None
         self._recording = False
         self._recording_time_left = 0
@@ -42,8 +42,8 @@ class ExerciseEditorFrame(ctk.CTkFrame):
         content.columnconfigure(0, weight=1)
         content.columnconfigure(1, weight=1)
 
-        # Left — fields
-        left = ctk.CTkFrame(content, fg_color="transparent")
+        # Left — scrollable fields
+        left = ctk.CTkScrollableFrame(content, fg_color="transparent")
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
 
         ctk.CTkLabel(left, text="Exercise Name").pack(anchor="w")
@@ -55,9 +55,33 @@ class ExerciseEditorFrame(ctk.CTkFrame):
         ctk.CTkOptionMenu(left, variable=self.view_var,
                           values=["side", "front", "back"]).pack(fill="x", pady=(0, 12))
 
-        ctk.CTkLabel(left, text="Instructions").pack(anchor="w")
-        self.instructions_text = ctk.CTkTextbox(left, height=200)
-        self.instructions_text.pack(fill="both", expand=True, pady=(0, 12))
+        ctk.CTkLabel(left, text="Client Instructions").pack(anchor="w")
+        ctk.CTkLabel(left, text="What the patient sees/hears before starting",
+                     text_color="gray", font=ctk.CTkFont(size=11)).pack(anchor="w")
+        self.client_instructions_text = ctk.CTkTextbox(left, height=100)
+        self.client_instructions_text.pack(fill="x", pady=(0, 12))
+
+        ctk.CTkLabel(left, text="Analysis Instructions").pack(anchor="w")
+        ctk.CTkLabel(left, text="What the LLM should look for and what feedback to give",
+                     text_color="gray", font=ctk.CTkFont(size=11)).pack(anchor="w")
+        self.llm_instructions_text = ctk.CTkTextbox(left, height=120)
+        self.llm_instructions_text.pack(fill="x", pady=(0, 12))
+
+        ctk.CTkLabel(left, text="Boundary Values").pack(anchor="w")
+        ctk.CTkLabel(left, text="Specific thresholds, e.g. knee must reach at least 90°",
+                     text_color="gray", font=ctk.CTkFont(size=11)).pack(anchor="w")
+        self.boundary_values_text = ctk.CTkTextbox(left, height=80)
+        self.boundary_values_text.pack(fill="x", pady=(0, 12))
+
+        ctk.CTkLabel(left, text="Display Values").pack(anchor="w")
+        ctk.CTkLabel(left, text="Which angle values to show on screen during analysis",
+                     text_color="gray", font=ctk.CTkFont(size=11)).pack(anchor="w")
+        self.display_values_text = ctk.CTkTextbox(left, height=80)
+        self.display_values_text.pack(fill="x", pady=(0, 12))
+
+        ctk.CTkLabel(left, text="Session Duration (seconds)").pack(anchor="w")
+        self.session_duration_entry = ctk.CTkEntry(left, placeholder_text="10")
+        self.session_duration_entry.pack(fill="x", pady=(0, 12))
 
         # Right — video
         right = ctk.CTkFrame(content, fg_color="transparent")
@@ -95,7 +119,11 @@ class ExerciseEditorFrame(ctk.CTkFrame):
             return
         self.name_entry.insert(0, ex.name)
         self.view_var.set(ex.camera_view)
-        self.instructions_text.insert("1.0", ex.instructions_text)
+        self.client_instructions_text.insert("1.0", ex.client_instructions)
+        self.llm_instructions_text.insert("1.0", ex.llm_instructions)
+        self.boundary_values_text.insert("1.0", ex.boundary_values)
+        self.display_values_text.insert("1.0", ex.display_values)
+        self.session_duration_entry.insert(0, str(ex.session_duration_secs))
         if ex.reference_video_path:
             self._video_path = ex.reference_video_path
             self.video_status.configure(text=f"Video: {Path(ex.reference_video_path).name}")
@@ -156,7 +184,7 @@ class ExerciseEditorFrame(ctk.CTkFrame):
 
     def _stop_recording(self):
         if not self._recording:
-            return  # already stopped (e.g. auto-stop fired after manual stop)
+            return
         if self._recorder:
             self._recorder.stop()
             self._recorder = None
@@ -177,26 +205,62 @@ class ExerciseEditorFrame(ctk.CTkFrame):
             setattr(self.video_label, "image", i),
         ))
 
+    def _get_fields(self) -> dict:
+        """Read all form fields. Returns dict with all values."""
+        try:
+            duration = int(self.session_duration_entry.get().strip())
+        except (ValueError, TypeError):
+            duration = 10
+        return {
+            "name": self.name_entry.get().strip() or "Unnamed Exercise",
+            "camera_view": self.view_var.get(),
+            "client_instructions": self.client_instructions_text.get("1.0", "end").strip(),
+            "llm_instructions": self.llm_instructions_text.get("1.0", "end").strip(),
+            "boundary_values": self.boundary_values_text.get("1.0", "end").strip(),
+            "display_values": self.display_values_text.get("1.0", "end").strip(),
+            "session_duration_secs": duration,
+        }
+
     def _save_exercise(self) -> str:
-        name = self.name_entry.get().strip() or "Unnamed Exercise"
-        instructions = self.instructions_text.get("1.0", "end").strip()
-        ex = self.ex_svc.create(name, self.view_var.get(), instructions)
+        f = self._get_fields()
+        ex = self.ex_svc.create(
+            f["name"], f["camera_view"],
+            client_instructions=f["client_instructions"],
+            llm_instructions=f["llm_instructions"],
+            boundary_values=f["boundary_values"],
+            display_values=f["display_values"],
+            session_duration_secs=f["session_duration_secs"],
+        )
         return ex.id
 
     def _save_and_generate(self):
-        name = self.name_entry.get().strip()
-        if not name:
-            self.status_label.configure(text="Exercise name is required.",
-                                        text_color="#e74c3c")
-            return
-        instructions = self.instructions_text.get("1.0", "end").strip()
-        camera_view = self.view_var.get()
+        f = self._get_fields()
+        if not f["name"] or f["name"] == "Unnamed Exercise":
+            name_raw = self.name_entry.get().strip()
+            if not name_raw:
+                self.status_label.configure(text="Exercise name is required.",
+                                            text_color="#e74c3c")
+                return
 
         if self.exercise_id:
-            self.ex_svc.update(self.exercise_id, name=name,
-                               camera_view=camera_view, instructions_text=instructions)
+            self.ex_svc.update(
+                self.exercise_id,
+                name=f["name"], camera_view=f["camera_view"],
+                client_instructions=f["client_instructions"],
+                llm_instructions=f["llm_instructions"],
+                boundary_values=f["boundary_values"],
+                display_values=f["display_values"],
+                session_duration_secs=f["session_duration_secs"],
+            )
         else:
-            ex = self.ex_svc.create(name, camera_view, instructions)
+            ex = self.ex_svc.create(
+                f["name"], f["camera_view"],
+                client_instructions=f["client_instructions"],
+                llm_instructions=f["llm_instructions"],
+                boundary_values=f["boundary_values"],
+                display_values=f["display_values"],
+                session_duration_secs=f["session_duration_secs"],
+            )
             self.exercise_id = ex.id
 
         self.status_label.configure(text="Generating analysis code…", text_color="white")
@@ -206,7 +270,14 @@ class ExerciseEditorFrame(ctk.CTkFrame):
         llm_svc = LLMService(self.db_conn, api_key=api_key)
 
         def run():
-            module = llm_svc.generate_module(self.exercise_id, name, camera_view, instructions)
+            module = llm_svc.generate_module(
+                self.exercise_id, f["name"], f["camera_view"],
+                client_instructions=f["client_instructions"],
+                llm_instructions=f["llm_instructions"],
+                boundary_values=f["boundary_values"],
+                display_values=f["display_values"],
+                session_duration_secs=f["session_duration_secs"],
+            )
             self.after(0, lambda: self._on_generation_done(module["status"]))
 
         threading.Thread(target=run, daemon=True).start()
@@ -226,7 +297,6 @@ class ExerciseEditorFrame(ctk.CTkFrame):
             self._recorder.stop()
         self._recording = False
         self._recorder = None
-        # Clean up a new exercise created only for recording if it was never completed
         if self._original_exercise_id is None and self.exercise_id is not None:
             if self.ex_svc.get_active_module(self.exercise_id) is None:
                 self.ex_svc.delete(self.exercise_id)
