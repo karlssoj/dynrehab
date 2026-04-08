@@ -9,7 +9,11 @@ class Exercise:
     id: str
     name: str
     camera_view: str
-    instructions_text: str
+    client_instructions: str
+    llm_instructions: str
+    boundary_values: str
+    display_values: str
+    session_duration_secs: int
     reference_video_path: str
     created_at: str
 
@@ -18,11 +22,20 @@ class ExerciseService:
     def __init__(self, conn: sqlite3.Connection):
         self.conn = conn
 
-    def create(self, name: str, camera_view: str, instructions_text: str) -> Exercise:
+    def create(self, name: str, camera_view: str,
+               client_instructions: str = "",
+               llm_instructions: str = "",
+               boundary_values: str = "",
+               display_values: str = "",
+               session_duration_secs: int = 10) -> Exercise:
         ex_id = str(uuid.uuid4())
         self.conn.execute(
-            "INSERT INTO exercises (id, name, camera_view, instructions_text) VALUES (?, ?, ?, ?)",
-            (ex_id, name, camera_view, instructions_text),
+            "INSERT INTO exercises "
+            "(id, name, camera_view, client_instructions, llm_instructions, "
+            "boundary_values, display_values, session_duration_secs) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (ex_id, name, camera_view, client_instructions, llm_instructions,
+             boundary_values, display_values, session_duration_secs),
         )
         self.conn.commit()
         return self.get(ex_id)
@@ -42,17 +55,28 @@ class ExerciseService:
         return [self._row_to_exercise(r) for r in rows]
 
     def update(self, exercise_id: str, name: str = None, camera_view: str = None,
-               instructions_text: str = None, reference_video_path: str = None) -> Exercise:
+               client_instructions: str = None, llm_instructions: str = None,
+               boundary_values: str = None, display_values: str = None,
+               session_duration_secs: int = None,
+               reference_video_path: str = None) -> Exercise:
         updates, params = [], []
-        for col, val in [("name", name), ("camera_view", camera_view),
-                         ("instructions_text", instructions_text),
-                         ("reference_video_path", reference_video_path)]:
+        for col, val in [
+            ("name", name), ("camera_view", camera_view),
+            ("client_instructions", client_instructions),
+            ("llm_instructions", llm_instructions),
+            ("boundary_values", boundary_values),
+            ("display_values", display_values),
+            ("session_duration_secs", session_duration_secs),
+            ("reference_video_path", reference_video_path),
+        ]:
             if val is not None:
                 updates.append(f"{col} = ?")
                 params.append(val)
         if updates:
             params.append(exercise_id)
-            self.conn.execute(f"UPDATE exercises SET {', '.join(updates)} WHERE id = ?", params)
+            self.conn.execute(
+                f"UPDATE exercises SET {', '.join(updates)} WHERE id = ?", params
+            )
             self.conn.commit()
         return self.get(exercise_id)
 
@@ -97,7 +121,8 @@ class ExerciseService:
 
     def set_active_module(self, exercise_id: str, module_id: str):
         self.conn.execute(
-            "UPDATE analysis_modules SET is_active = 0 WHERE exercise_id = ?", (exercise_id,)
+            "UPDATE analysis_modules SET is_active = 0 WHERE exercise_id = ?",
+            (exercise_id,),
         )
         self.conn.execute(
             "UPDATE analysis_modules SET is_active = 1 WHERE id = ?", (module_id,)
@@ -109,7 +134,11 @@ class ExerciseService:
         d = dict(row)
         return Exercise(
             id=d["id"], name=d["name"], camera_view=d["camera_view"],
-            instructions_text=d.get("instructions_text") or "",
+            client_instructions=d.get("client_instructions") or "",
+            llm_instructions=d.get("llm_instructions") or "",
+            boundary_values=d.get("boundary_values") or "",
+            display_values=d.get("display_values") or "",
+            session_duration_secs=int(d.get("session_duration_secs") or 10),
             reference_video_path=d.get("reference_video_path") or "",
             created_at=d.get("created_at") or "",
         )
