@@ -2,10 +2,6 @@ import customtkinter as ctk
 from dotenv import load_dotenv
 from physio_app.db import init_db
 
-load_dotenv()
-ctk.set_appearance_mode("dark")
-ctk.set_default_color_theme("blue")
-
 
 class PhysioMotionApp(ctk.CTk):
     def __init__(self, db_conn):
@@ -70,6 +66,9 @@ class PhysioMotionApp(ctk.CTk):
 
 
 def main():
+    load_dotenv()
+    ctk.set_appearance_mode("dark")
+    ctk.set_default_color_theme("blue")
     conn = init_db()
     app = PhysioMotionApp(conn)
     try:
