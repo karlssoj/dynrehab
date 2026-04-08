@@ -19,9 +19,12 @@ class CodeViewerFrame(ctk.CTkFrame):
         self._load()
 
     def _build(self):
-        ctk.CTkButton(self, text="← Back", width=80,
-                      command=lambda: self.app.show_exercise_list()).pack(
-            anchor="nw", padx=20, pady=(15, 0))
+        nav = ctk.CTkFrame(self, fg_color="transparent")
+        nav.pack(fill="x", padx=20, pady=(15, 0))
+        ctk.CTkButton(nav, text="← Back", width=80,
+                      command=lambda: self.app.show_exercise_list()).pack(side="left")
+        ctk.CTkButton(nav, text="← Home", width=80,
+                      command=self.app.show_launcher).pack(side="left", padx=(8, 0))
 
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.pack(fill="x", padx=20, pady=(5, 8))

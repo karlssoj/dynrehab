@@ -19,6 +19,8 @@ class ExerciseListFrame(ctk.CTkFrame):
     def _build(self):
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.pack(fill="x", padx=20, pady=(20, 10))
+        ctk.CTkButton(header, text="← Home", width=80,
+                      command=self.app.show_launcher).pack(side="left", padx=(0, 12))
         ctk.CTkLabel(header, text="Exercises",
                      font=ctk.CTkFont(size=24, weight="bold")).pack(side="left")
         ctk.CTkButton(header, text="+ New Exercise",
