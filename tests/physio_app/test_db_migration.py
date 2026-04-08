@@ -1,5 +1,4 @@
 import sqlite3
-import pytest
 
 
 def _make_old_db(db_path: str):
