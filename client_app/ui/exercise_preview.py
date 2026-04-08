@@ -103,4 +103,4 @@ class ExercisePreviewFrame(ctk.CTkFrame):
 
     def _back(self):
         self._playing = False
-        self.app.show_exercise_list()
+        self.app.show_client_exercise_list()
