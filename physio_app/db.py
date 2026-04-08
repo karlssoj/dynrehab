@@ -15,6 +15,7 @@ def init_db(db_path: str = None) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     _create_tables(conn)
+    _migrate(conn)
     return conn
 
 
@@ -24,7 +25,11 @@ def _create_tables(conn: sqlite3.Connection):
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             camera_view TEXT NOT NULL,
-            instructions_text TEXT DEFAULT '',
+            client_instructions TEXT DEFAULT '',
+            llm_instructions TEXT DEFAULT '',
+            boundary_values TEXT DEFAULT '',
+            display_values TEXT DEFAULT '',
+            session_duration_secs INTEGER DEFAULT 10,
             reference_video_path TEXT DEFAULT '',
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
@@ -59,3 +64,23 @@ def _create_tables(conn: sqlite3.Connection):
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
     """)
+
+
+def _migrate(conn: sqlite3.Connection):
+    """Add new exercise fields to existing DBs, wiping all data first."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(exercises)")}
+    if "client_instructions" not in cols:
+        conn.executescript("""
+            DELETE FROM analysis_modules;
+            DELETE FROM sessions;
+            DELETE FROM llm_logs;
+            DELETE FROM exercises;
+        """)
+        conn.execute("ALTER TABLE exercises ADD COLUMN client_instructions TEXT DEFAULT ''")
+        conn.execute("ALTER TABLE exercises ADD COLUMN llm_instructions TEXT DEFAULT ''")
+        conn.execute("ALTER TABLE exercises ADD COLUMN boundary_values TEXT DEFAULT ''")
+        conn.execute("ALTER TABLE exercises ADD COLUMN display_values TEXT DEFAULT ''")
+        conn.execute(
+            "ALTER TABLE exercises ADD COLUMN session_duration_secs INTEGER DEFAULT 10"
+        )
+        conn.commit()
