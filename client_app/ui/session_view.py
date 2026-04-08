@@ -30,6 +30,8 @@ class SessionViewFrame(ctk.CTkFrame):
     def _build(self):
         top = ctk.CTkFrame(self, fg_color="transparent")
         top.pack(fill="x", padx=20, pady=(12, 0))
+        ctk.CTkButton(top, text="← Home", width=80,
+                      command=self._go_home).pack(side="left", padx=(0, 10))
         self.title_label = ctk.CTkLabel(top, text="",
                                         font=ctk.CTkFont(size=18, weight="bold"))
         self.title_label.pack(side="left")
@@ -81,6 +83,7 @@ class SessionViewFrame(ctk.CTkFrame):
         else:
             self._session.start_countdown()
             self._countdown_triggered = True
+        self._relevant_joints: list = self._session.get_relevant_joints()
         self._engine.subscribe(self._on_frame)
         self._engine.start()
 
@@ -240,56 +243,51 @@ class SessionViewFrame(ctk.CTkFrame):
             first_line = self._feedback_lines[0] if self._feedback_lines else ""
             self.feedback_label.configure(text=first_line)
 
-    _ANGLE_FIELDS = [
-        ("L elbow",    "left_elbow_angle"),
-        ("R elbow",    "right_elbow_angle"),
-        ("L shoulder", "left_shoulder_angle"),
-        ("R shoulder", "right_shoulder_angle"),
-        ("L knee",     "left_knee_angle"),
-        ("R knee",     "right_knee_angle"),
-        ("L hip",      "left_hip_angle"),
-        ("R hip",      "right_hip_angle"),
-        ("L ankle",    "left_ankle_angle"),
-        ("R ankle",    "right_ankle_angle"),
-        ("trunk lean", "trunk_lean_angle"),
-        ("neck",       "neck_angle"),
-        ("pelvic tilt","pelvic_tilt"),
-        ("L HKA",      "left_hka_alignment"),
-        ("R HKA",      "right_hka_alignment"),
-        ("L arm elev", "left_arm_elevation"),
-        ("R arm elev", "right_arm_elevation"),
-    ]
-
     def _update_camera(self, bgr_frame: np.ndarray, pose_frame: PoseFrame | None):
         frame = bgr_frame.copy()
-        if pose_frame is not None:
-            self._draw_angle_overlay(frame, pose_frame)
+        if pose_frame is not None and self._relevant_joints:
+            self._draw_joint_bar(frame, pose_frame)
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         img = Image.fromarray(cv2.resize(rgb, (640, 480)))
         ctk_img = ctk.CTkImage(light_image=img, size=(640, 480))
         self.camera_label.configure(image=ctk_img, text="")
         self.camera_label.image = ctk_img
 
-    def _draw_angle_overlay(self, frame: np.ndarray, pose_frame: PoseFrame):
-        font       = cv2.FONT_HERSHEY_SIMPLEX
-        scale      = 0.45
-        thickness  = 1
-        line_h     = 18
-        pad        = 6
-        col_w      = 155
+    # These fields use 180°=straight — convert to 0°=straight for display
+    _BEND_FIELDS = {
+        "left_elbow_angle", "right_elbow_angle",
+        "left_knee_angle",  "right_knee_angle",
+        "left_hip_angle",   "right_hip_angle",
+        "left_ankle_angle", "right_ankle_angle",
+    }
 
-        rows = self._ANGLE_FIELDS
-        box_h = pad * 2 + len(rows) * line_h
-        box_w = pad * 2 + col_w
+    def _draw_joint_bar(self, frame: np.ndarray, pose_frame: PoseFrame):
+        joints = self._relevant_joints
+        if not joints:
+            return
+        h, w = frame.shape[:2]
+        font      = cv2.FONT_HERSHEY_SIMPLEX
+        scale     = 0.9
+        thickness = 2
+        bar_h     = 44
+        # Draw semi-transparent dark bar across the top
         overlay = frame.copy()
-        cv2.rectangle(overlay, (0, 0), (box_w, box_h), (0, 0, 0), -1)
-        cv2.addWeighted(overlay, 0.5, frame, 0.5, 0, frame)
-
-        for i, (label, attr) in enumerate(rows):
-            val = getattr(pose_frame, attr, 0.0)
+        cv2.rectangle(overlay, (0, 0), (w, bar_h), (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
+        # Evenly space items across the bar
+        n = len(joints)
+        cell_w = w // n
+        for i, (label, key) in enumerate(joints):
+            val = getattr(pose_frame, key, None)
+            if val is None:
+                val = 0.0
+            if key in self._BEND_FIELDS:
+                val = 180.0 - val
             text = f"{label}: {val:.0f}"
-            y = pad + (i + 1) * line_h
-            cv2.putText(frame, text, (pad, y), font, scale, (0, 220, 255), thickness)
+            text_size = cv2.getTextSize(text, font, scale, thickness)[0]
+            tx = i * cell_w + (cell_w - text_size[0]) // 2
+            ty = (bar_h + text_size[1]) // 2
+            cv2.putText(frame, text, (tx, ty), font, scale, (0, 220, 255), thickness)
 
     def _end_session(self):
         self._engine.stop()
@@ -302,3 +300,8 @@ class SessionViewFrame(ctk.CTkFrame):
             self._tts.speak_immediate(speech)
         ex = self.ex_svc.get(self.exercise_id)
         self.app.show_session_summary(summary, ex.name if ex else "Exercise")
+
+    def _go_home(self):
+        self._engine.stop()
+        self._engine.unsubscribe(self._on_frame)
+        self.app.show_launcher()

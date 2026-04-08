@@ -44,6 +44,8 @@ class SessionSummaryFrame(ctk.CTkFrame):
 
         ctk.CTkButton(self, text="Done", height=44, width=160,
                       command=lambda: self.app.show_client_exercise_list()).pack(pady=10)
+        ctk.CTkButton(self, text="← Home", width=100,
+                      command=self.app.show_launcher).pack(pady=(0, 20))
 
     @staticmethod
     def _stat_box(parent, label: str, value: str) -> ctk.CTkFrame:

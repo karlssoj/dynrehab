@@ -11,8 +11,11 @@ class ClientExerciseListFrame(ctk.CTkFrame):
         self._build()
 
     def _build(self):
+        ctk.CTkButton(self, text="← Home", width=80,
+                      command=self.app.show_launcher).pack(
+            anchor="nw", padx=20, pady=(15, 0))
         ctk.CTkLabel(self, text="Select an Exercise",
-                     font=ctk.CTkFont(size=26, weight="bold")).pack(pady=(30, 20))
+                     font=ctk.CTkFont(size=26, weight="bold")).pack(pady=(10, 20))
 
         scroll = ctk.CTkScrollableFrame(self)
         scroll.pack(fill="both", expand=True, padx=40, pady=(0, 20))
