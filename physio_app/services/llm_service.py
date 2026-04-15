@@ -179,11 +179,14 @@ def generate_round_feedback(round_data: dict) -> list[str]:
     # - Keep each sentence concise — they will be spoken aloud.
 
 def get_relevant_joints() -> list:
-    # OPTIONAL. Returns which joint values to display prominently on screen during the session.
+    # OPTIONAL. Returns which joint values to display in the sidebar during the session.
     # Each entry is a (display_label, pose_data_key) pair.
     # pose_data_key must be a key that exists in the pose_data dict.
-    # Return 1-4 joints — the ones most informative for THIS exercise.
-    # Example: [("Trunk lean", "trunk_lean_angle"), ("L knee", "left_knee_angle")]
+    # IMPORTANT: Return ONLY the joints that were explicitly listed in the
+    # "Display Values" field. Do NOT add extra joints beyond what was requested.
+    # If no Display Values were specified, return the 1-2 most clinically relevant joints.
+    # Keep display labels short (≤ 12 chars) — they appear in a narrow sidebar.
+    # Example: [("Trunk lean", "trunk_lean_2d"), ("L knee bend", "left_knee_bend_2d")]
 
 def get_session_summary(session_data: dict) -> str:
     # REQUIRED. Called once when the patient ends the session.

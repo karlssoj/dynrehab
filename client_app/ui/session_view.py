@@ -57,8 +57,14 @@ class SessionViewFrame(ctk.CTkFrame):
                                       font=ctk.CTkFont(size=64, weight="bold"))
         self.rep_label.pack()
 
+        ctk.CTkLabel(right, text="Live Values",
+                     font=ctk.CTkFont(size=14)).pack(pady=(20, 4))
+        self._joints_frame = ctk.CTkFrame(right, fg_color="#111122", corner_radius=8)
+        self._joints_frame.pack(fill="x", padx=10, pady=(0, 4))
+        self._joint_value_labels: dict[str, ctk.CTkLabel] = {}
+
         ctk.CTkLabel(right, text="Feedback",
-                     font=ctk.CTkFont(size=14)).pack(pady=(30, 6))
+                     font=ctk.CTkFont(size=14)).pack(pady=(16, 6))
         self.feedback_label = ctk.CTkLabel(right, text="",
                                            wraplength=200, justify="center",
                                            font=ctk.CTkFont(size=13))
@@ -87,6 +93,7 @@ class SessionViewFrame(ctk.CTkFrame):
             self._session.start_countdown()
             self._countdown_triggered = True
         self._relevant_joints: list = self._session.get_relevant_joints()
+        self._build_joint_labels()
         self._engine.subscribe(self._on_frame)
         self._engine.start()
 
@@ -227,8 +234,12 @@ class SessionViewFrame(ctk.CTkFrame):
                 self._feedback_end_scheduled = True
                 self._session.end_feedback()
 
-        # Update camera with angle overlay
+        # Update camera (clean — no overlaid text on the video)
         self._update_camera(display, pose_frame)
+
+        # Update sidebar joint value labels during exercise
+        if state == "exercise" and pose_frame is not None and self._joint_value_labels:
+            self._update_joint_labels(pose_frame)
 
         # Update right panel labels based on state
         if state == "instructions":
@@ -246,10 +257,7 @@ class SessionViewFrame(ctk.CTkFrame):
             self.feedback_label.configure(text=first_line)
 
     def _update_camera(self, bgr_frame: np.ndarray, pose_frame: PoseFrame | None):
-        frame = bgr_frame.copy()
-        if pose_frame is not None and self._relevant_joints:
-            self._draw_joint_bar(frame, pose_frame)
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
         img = Image.fromarray(cv2.resize(rgb, (640, 480)))
         ctk_img = ctk.CTkImage(light_image=img, size=(640, 480))
         self.camera_label.configure(image=ctk_img, text="")
@@ -263,33 +271,37 @@ class SessionViewFrame(ctk.CTkFrame):
         "left_ankle_angle", "right_ankle_angle",
     }
 
-    def _draw_joint_bar(self, frame: np.ndarray, pose_frame: PoseFrame):
-        joints = self._relevant_joints
-        if not joints:
+    def _build_joint_labels(self):
+        """Create one label row per relevant joint in the joints panel."""
+        for widget in self._joints_frame.winfo_children():
+            widget.destroy()
+        self._joint_value_labels.clear()
+        if not self._relevant_joints:
+            ctk.CTkLabel(self._joints_frame, text="None configured",
+                         text_color="gray", font=ctk.CTkFont(size=11)).pack(pady=6)
             return
-        h, w = frame.shape[:2]
-        font      = cv2.FONT_HERSHEY_SIMPLEX
-        scale     = 0.9
-        thickness = 2
-        bar_h     = 44
-        # Draw semi-transparent dark bar across the top
-        overlay = frame.copy()
-        cv2.rectangle(overlay, (0, 0), (w, bar_h), (0, 0, 0), -1)
-        cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
-        # Evenly space items across the bar
-        n = len(joints)
-        cell_w = w // n
-        for i, (label, key) in enumerate(joints):
+        for display_label, key in self._relevant_joints:
+            row = ctk.CTkFrame(self._joints_frame, fg_color="transparent")
+            row.pack(fill="x", padx=10, pady=3)
+            ctk.CTkLabel(row, text=display_label,
+                         font=ctk.CTkFont(size=12), text_color="#aaaacc",
+                         anchor="w").pack(side="left")
+            val_lbl = ctk.CTkLabel(row, text="—",
+                                   font=ctk.CTkFont(size=14, weight="bold"),
+                                   text_color="#00dcff", anchor="e")
+            val_lbl.pack(side="right")
+            self._joint_value_labels[key] = val_lbl
+
+    def _update_joint_labels(self, pose_frame: PoseFrame):
+        """Refresh the sidebar value labels from the current pose frame."""
+        for key, lbl in self._joint_value_labels.items():
             val = getattr(pose_frame, key, None)
             if val is None:
-                val = 0.0
+                lbl.configure(text="—")
+                continue
             if key in self._BEND_FIELDS:
-                val = 180.0 - val
-            text = f"{label}: {val:.0f}"
-            text_size = cv2.getTextSize(text, font, scale, thickness)[0]
-            tx = i * cell_w + (cell_w - text_size[0]) // 2
-            ty = (bar_h + text_size[1]) // 2
-            cv2.putText(frame, text, (tx, ty), font, scale, (0, 220, 255), thickness)
+                val = 180.0 - float(val)
+            lbl.configure(text=f"{float(val):.1f}°")
 
     def _end_session(self):
         self._engine.stop()
