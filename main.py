@@ -59,10 +59,6 @@ class PhysioMotionApp(ctk.CTk):
         from client_app.ui.session_view import SessionViewFrame
         self._switch_frame(SessionViewFrame, exercise_id=exercise_id)
 
-    def show_session_summary(self, summary: dict, exercise_name: str):
-        self.title("PhysioMotion AI — Rehabilitation Assistant")
-        from client_app.ui.session_summary import SessionSummaryFrame
-        self._switch_frame(SessionSummaryFrame, summary=summary, exercise_name=exercise_name)
 
 
 def main():

@@ -308,14 +308,10 @@ class SessionViewFrame(ctk.CTkFrame):
     def _end_session(self):
         self._engine.stop()
         self._engine.unsubscribe(self._on_frame)
-        summary = self._session.get_summary() if self._session else {
-            "rep_count": 0, "quality_pct": 0, "feedback_log": [], "duration_seconds": 0
-        }
         speech = self._session.get_session_summary_speech() if self._session else ""
         if speech:
             self._tts.speak_immediate(speech)
-        ex = self.ex_svc.get(self.exercise_id)
-        self.app.show_session_summary(summary, ex.name if ex else "Exercise")
+        self.app.show_launcher()
 
     def _go_home(self):
         self._engine.stop()
