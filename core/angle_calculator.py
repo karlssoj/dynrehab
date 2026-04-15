@@ -52,6 +52,29 @@ def _vector_to_horizontal_angle(a: tuple, b: tuple) -> float:
     return float(np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0))))
 
 
+def _trunk_lean_2d(a: tuple, b: tuple) -> float:
+    """2D trunk lean using x,y only (immune to z-depth noise). 0°=upright, increases leaning."""
+    v = np.array([b[0] - a[0], b[1] - a[1]], dtype=float)
+    norm = np.linalg.norm(v)
+    if norm < 1e-10:
+        return 0.0
+    vertical = np.array([0.0, -1.0])
+    cosine = np.dot(v, vertical) / norm
+    return float(np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0))))
+
+
+def _signed_knee_valgus(hip: tuple, knee: tuple, ankle: tuple, side: str) -> float:
+    """Signed lateral knee deviation from the hip-ankle midpoint x position.
+    Positive = valgus (knee inward/medial), negative = varus (knee outward/lateral).
+    Designed for front-facing camera. Values in normalised [0,1] x coordinates.
+    For front camera: patient's LEFT leg appears on the RIGHT of the image (higher x),
+    so left-leg inward movement = lower x → negate raw for consistent sign.
+    """
+    midpoint_x = (hip[0] + ankle[0]) / 2.0
+    raw = knee[0] - midpoint_x
+    return float(-raw if side == "left" else raw)
+
+
 def calculate_angles(keypoints: dict) -> dict:
     """Calculate all joint angles from a keypoints dict (name → (x,y,z,vis))."""
     def lm(name):
@@ -84,4 +107,15 @@ def calculate_angles(keypoints: dict) -> dict:
         "right_hka_alignment":  _angle_frontal_plane(lm("right_hip"), lm("right_knee"), lm("right_ankle")),
         "left_arm_elevation":   _angle_frontal_plane(lm("left_hip"),  lm("left_shoulder"),  lm("left_wrist")),
         "right_arm_elevation":  _angle_frontal_plane(lm("right_hip"), lm("right_shoulder"), lm("right_wrist")),
+        # 2D bend angles (x,y only — immune to z-depth noise, reliable from side view)
+        # Convention: 0 = joint straight, increases as joint bends
+        "left_elbow_bend_2d":  180.0 - _angle_frontal_plane(lm("left_shoulder"),  lm("left_elbow"),  lm("left_wrist")),
+        "right_elbow_bend_2d": 180.0 - _angle_frontal_plane(lm("right_shoulder"), lm("right_elbow"), lm("right_wrist")),
+        "left_knee_bend_2d":   180.0 - _angle_frontal_plane(lm("left_hip"),        lm("left_knee"),   lm("left_ankle")),
+        "right_knee_bend_2d":  180.0 - _angle_frontal_plane(lm("right_hip"),       lm("right_knee"),  lm("right_ankle")),
+        "left_hip_bend_2d":    180.0 - _angle_frontal_plane(lm("left_shoulder"),   lm("left_hip"),    lm("left_knee")),
+        "right_hip_bend_2d":   180.0 - _angle_frontal_plane(lm("right_shoulder"),  lm("right_hip"),   lm("right_knee")),
+        "trunk_lean_2d":       _trunk_lean_2d(hip_mid, shoulder_mid),
+        "left_knee_valgus":    _signed_knee_valgus(lm("left_hip"),  lm("left_knee"),  lm("left_ankle"),  "left"),
+        "right_knee_valgus":   _signed_knee_valgus(lm("right_hip"), lm("right_knee"), lm("right_ankle"), "right"),
     }

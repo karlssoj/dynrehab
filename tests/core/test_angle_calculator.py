@@ -1,5 +1,5 @@
 import math
-from core.angle_calculator import _angle_3d, _angle_frontal_plane, _vector_to_vertical_angle, calculate_angles
+from core.angle_calculator import _angle_3d, _angle_frontal_plane, _vector_to_vertical_angle, _trunk_lean_2d, _signed_knee_valgus, calculate_angles
 
 
 def test_angle_3d_right_angle():
@@ -72,3 +72,114 @@ def test_calculate_angles_returns_all_keys():
     ]
     for key in expected:
         assert key in result
+
+
+def test_trunk_lean_2d_upright():
+    """Trunk pointing straight up → ~0° lean."""
+    hip = (0.5, 0.8, 0.0, 1.0)
+    shoulder = (0.5, 0.4, 0.0, 1.0)  # directly above hip → upright
+    assert abs(_trunk_lean_2d(hip, shoulder)) < 0.01
+
+
+def test_trunk_lean_2d_leaning():
+    """Trunk shifted horizontally → lean > 0."""
+    hip = (0.5, 0.8, 0.0, 1.0)
+    shoulder = (0.7, 0.4, 0.0, 1.0)  # shifted right while up → leaning
+    angle = _trunk_lean_2d(hip, shoulder)
+    assert 0.0 < angle < 90.0
+
+
+def test_signed_knee_valgus_left_neutral():
+    """Left knee on the hip-ankle line → near zero."""
+    hip = (0.6, 0.3, 0.0, 1.0)
+    ankle = (0.5, 0.9, 0.0, 1.0)   # midpoint_x = 0.55
+    knee = (0.55, 0.6, 0.0, 1.0)   # knee exactly at midpoint
+    assert abs(_signed_knee_valgus(hip, knee, ankle, "left")) < 0.001
+
+
+def test_signed_knee_valgus_left_valgus():
+    """Left knee medial (lower x for left leg) → positive."""
+    hip = (0.6, 0.3, 0.0, 1.0)
+    ankle = (0.5, 0.9, 0.0, 1.0)   # midpoint_x = 0.55
+    knee = (0.45, 0.6, 0.0, 1.0)   # knee at 0.45 < 0.55 → inward → valgus
+    assert _signed_knee_valgus(hip, knee, ankle, "left") > 0.0
+
+
+def test_signed_knee_valgus_left_varus():
+    """Left knee lateral (higher x for left leg) → negative."""
+    hip = (0.6, 0.3, 0.0, 1.0)
+    ankle = (0.5, 0.9, 0.0, 1.0)   # midpoint_x = 0.55
+    knee = (0.65, 0.6, 0.0, 1.0)   # knee at 0.65 > 0.55 → outward → varus
+    assert _signed_knee_valgus(hip, knee, ankle, "left") < 0.0
+
+
+def test_signed_knee_valgus_right_valgus():
+    """Right knee medial (higher x for right leg) → positive."""
+    hip = (0.4, 0.3, 0.0, 1.0)
+    ankle = (0.45, 0.9, 0.0, 1.0)  # midpoint_x = 0.425
+    knee = (0.5, 0.6, 0.0, 1.0)    # knee at 0.5 > 0.425 → inward → valgus
+    assert _signed_knee_valgus(hip, knee, ankle, "right") > 0.0
+
+
+def test_signed_knee_valgus_right_varus():
+    """Right knee lateral (lower x for right leg) → negative."""
+    hip = (0.4, 0.3, 0.0, 1.0)
+    ankle = (0.45, 0.9, 0.0, 1.0)  # midpoint_x = 0.425
+    knee = (0.35, 0.6, 0.0, 1.0)   # knee at 0.35 < 0.425 → outward → varus
+    assert _signed_knee_valgus(hip, knee, ankle, "right") < 0.0
+
+
+def test_calculate_angles_includes_new_keys():
+    """All 9 new pre-computed keys must be present in calculate_angles output."""
+    kp = {name: (0.5, 0.5, 0.0, 1.0) for name in [
+        "left_hip", "left_knee", "left_ankle", "left_foot_index",
+        "right_hip", "right_knee", "right_ankle", "right_foot_index",
+        "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
+        "left_wrist", "right_wrist", "left_index", "right_index",
+        "nose",
+    ]}
+    result = calculate_angles(kp)
+    for key in [
+        "left_elbow_bend_2d", "right_elbow_bend_2d",
+        "left_knee_bend_2d", "right_knee_bend_2d",
+        "left_hip_bend_2d", "right_hip_bend_2d",
+        "trunk_lean_2d",
+        "left_knee_valgus", "right_knee_valgus",
+    ]:
+        assert key in result, f"Missing key: {key}"
+
+
+def test_elbow_bend_2d_straight_arm():
+    """Straight arm (shoulder-elbow-wrist collinear vertically) → bend near 0."""
+    kp = {
+        "left_shoulder": (0.4, 0.3, 0.0, 1.0),
+        "left_elbow":    (0.4, 0.5, 0.0, 1.0),
+        "left_wrist":    (0.4, 0.7, 0.0, 1.0),
+        **{name: (0.5, 0.5, 0.0, 1.0) for name in [
+            "right_shoulder", "right_elbow", "right_wrist",
+            "left_hip", "right_hip", "left_knee", "right_knee",
+            "left_ankle", "right_ankle", "left_foot_index", "right_foot_index",
+            "left_index", "right_index", "nose",
+        ]}
+    }
+    result = calculate_angles(kp)
+    assert result["left_elbow_bend_2d"] < 5.0, \
+        f"Straight arm should give ~0° bend, got {result['left_elbow_bend_2d']:.1f}°"
+
+
+def test_elbow_bend_2d_bent_arm():
+    """Bent arm (wrist moved forward and up from elbow) → bend > 90°."""
+    kp = {
+        "left_shoulder": (0.5, 0.3, 0.0, 1.0),
+        "left_elbow":    (0.5, 0.5, 0.0, 1.0),
+        "left_wrist":    (0.3, 0.35, 0.0, 1.0),  # wrist moved forward + up = curled
+        **{name: (0.5, 0.5, 0.0, 1.0) for name in [
+            "right_shoulder", "right_elbow", "right_wrist",
+            "left_hip", "right_hip", "left_knee", "right_knee",
+            "left_ankle", "right_ankle", "left_foot_index", "right_foot_index",
+            "left_index", "right_index", "nose",
+        ]}
+    }
+    result = calculate_angles(kp)
+    assert result["left_elbow_bend_2d"] > 90.0, \
+        f"Bent arm should give >90° bend, got {result['left_elbow_bend_2d']:.1f}°"

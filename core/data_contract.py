@@ -23,6 +23,15 @@ class PoseFrame:
     right_hka_alignment: float = 0.0
     left_arm_elevation: float = 0.0
     right_arm_elevation: float = 0.0
+    left_elbow_bend_2d: float = 0.0
+    right_elbow_bend_2d: float = 0.0
+    left_knee_bend_2d: float = 0.0
+    right_knee_bend_2d: float = 0.0
+    left_hip_bend_2d: float = 0.0
+    right_hip_bend_2d: float = 0.0
+    trunk_lean_2d: float = 0.0
+    left_knee_valgus: float = 0.0
+    right_knee_valgus: float = 0.0
     keypoints: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
