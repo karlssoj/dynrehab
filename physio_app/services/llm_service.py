@@ -186,7 +186,18 @@ def get_relevant_joints() -> list:
     # "Display Values" field. Do NOT add extra joints beyond what was requested.
     # If no Display Values were specified, return the 1-2 most clinically relevant joints.
     # Keep display labels short (≤ 12 chars) — they appear in a narrow sidebar.
-    # Example: [("Trunk lean", "trunk_lean_2d"), ("L knee bend", "left_knee_bend_2d")]
+    #
+    # DISPLAY KEY SELECTION — camera view matters:
+    #   FRONT-VIEW squats/lunges: use "left_knee_angle" / "right_knee_angle"
+    #     These are 3D and capture depth (z), so the value changes as the knee bends.
+    #     Do NOT use "left_knee_bend_2d" for front-view — it uses x,y only and barely
+    #     changes during a front-view squat because the bend happens in depth (z).
+    #   SIDE-VIEW squats/lunges: use "left_knee_bend_2d" / "right_knee_bend_2d"
+    #     These are more reliable from the side (immune to z-depth noise).
+    #   The UI automatically converts "left_knee_angle" / "right_knee_angle" and other
+    #   raw angle fields to 0°=straight convention, so no manual inversion is needed.
+    # Example (front): [("L knee", "left_knee_angle"), ("R knee", "right_knee_angle")]
+    # Example (side):  [("Knee bend", "left_knee_bend_2d"), ("Trunk", "trunk_lean_2d")]
 
 def get_session_summary(session_data: dict) -> str:
     # REQUIRED. Called once when the patient ends the session.

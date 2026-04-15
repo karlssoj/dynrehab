@@ -263,12 +263,14 @@ class SessionViewFrame(ctk.CTkFrame):
         self.camera_label.configure(image=ctk_img, text="")
         self.camera_label.image = ctk_img
 
-    # These fields use 180°=straight — convert to 0°=straight for display
+    # These fields use 180°=straight — convert to 0°=straight for display.
+    # Includes both the 3D raw angles AND the frontal-plane HKA alignment angles.
     _BEND_FIELDS = {
-        "left_elbow_angle", "right_elbow_angle",
-        "left_knee_angle",  "right_knee_angle",
-        "left_hip_angle",   "right_hip_angle",
-        "left_ankle_angle", "right_ankle_angle",
+        "left_elbow_angle",    "right_elbow_angle",
+        "left_knee_angle",     "right_knee_angle",
+        "left_hip_angle",      "right_hip_angle",
+        "left_ankle_angle",    "right_ankle_angle",
+        "left_hka_alignment",  "right_hka_alignment",
     }
 
     def _build_joint_labels(self):
