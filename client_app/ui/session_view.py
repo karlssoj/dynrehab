@@ -45,7 +45,7 @@ class SessionViewFrame(ctk.CTkFrame):
         main.columnconfigure(1, weight=1)
 
         self.camera_label = ctk.CTkLabel(main, text="Starting camera…",
-                                         width=640, height=480, fg_color="#1a1a2e")
+                                         width=768, height=576, fg_color="#1a1a2e")
         self.camera_label.grid(row=0, column=0, sticky="nsew", padx=(0, 15))
 
         right = ctk.CTkFrame(main)
@@ -258,8 +258,8 @@ class SessionViewFrame(ctk.CTkFrame):
 
     def _update_camera(self, bgr_frame: np.ndarray, pose_frame: PoseFrame | None):
         rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
-        img = Image.fromarray(cv2.resize(rgb, (640, 480)))
-        ctk_img = ctk.CTkImage(light_image=img, size=(640, 480))
+        img = Image.fromarray(cv2.resize(rgb, (768, 576)))
+        ctk_img = ctk.CTkImage(light_image=img, size=(768, 576))
         self.camera_label.configure(image=ctk_img, text="")
         self.camera_label.image = ctk_img
 
@@ -284,10 +284,10 @@ class SessionViewFrame(ctk.CTkFrame):
             row = ctk.CTkFrame(self._joints_frame, fg_color="transparent")
             row.pack(fill="x", padx=10, pady=3)
             ctk.CTkLabel(row, text=display_label,
-                         font=ctk.CTkFont(size=12), text_color="#aaaacc",
+                         font=ctk.CTkFont(size=24), text_color="#aaaacc",
                          anchor="w").pack(side="left")
             val_lbl = ctk.CTkLabel(row, text="—",
-                                   font=ctk.CTkFont(size=14, weight="bold"),
+                                   font=ctk.CTkFont(size=28, weight="bold"),
                                    text_color="#00dcff", anchor="e")
             val_lbl.pack(side="right")
             self._joint_value_labels[key] = val_lbl
