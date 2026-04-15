@@ -158,10 +158,18 @@ def generate_round_feedback(round_data: dict) -> list[str]:
     # (e.g. the patient walked away from camera or was completely still).
     # - ALWAYS run all quality checks (pelvic tilt, knee valgus, trunk lean, etc.)
     #   regardless of rep_count. Do NOT return early after the rep-count message.
+    # - ALWAYS give at least one specific positive observation — never leave the
+    #   feedback at just a rep-count acknowledgement. Measure what was done well
+    #   and say it explicitly: "Your squat depth was excellent — you reached parallel",
+    #   "Your back stayed straight throughout", "Good knee alignment throughout".
+    #   The positive observation must be based on actual measured values from frames,
+    #   not a generic compliment.
     # - If rep_count is 0 but movement was detected in frames: describe what the patient
     #   did ("you squatted about halfway down") and what they need to do differently
     #   ("bend your knees further — aim for a deeper squat").
-    # - If rep_count > 0, open with acknowledgement + depth feedback, then quality checks.
+    # - If rep_count > 0: open with rep count + one specific positive quality observation,
+    #   then add corrective cues only for issues that actually occurred.
+    #   If form was good across all checks, give two positive observations instead.
     # - Give verbal coaching cues a physiotherapist would say out loud.
     #   Describe movement quality in plain language ("bend your arms more",
     #   "lean further forward", "snap back upright between each rep").
@@ -202,6 +210,8 @@ def get_session_summary(session_data: dict) -> str:
     # - Use angle_stats to determine what quality level the patient reached.
     #   Phrase feedback as verbal coaching by default — no raw degree values —
     #   unless the physiotherapist's instructions explicitly request angle values.
+    # - ALWAYS mention at least one thing the patient did well based on the data,
+    #   in addition to any corrective cues. If the session was strong, lead with praise.
     # - If total_reps is 0, explain what the patient should do differently.
     # - Ignore any angle_stats entry whose "min" < 10.0 — it is a detection artifact.
     # - Return a single string, 2-4 sentences maximum.
