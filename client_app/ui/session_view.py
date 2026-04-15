@@ -48,6 +48,20 @@ class SessionViewFrame(ctk.CTkFrame):
                                          width=768, height=576, fg_color="#1a1a2e")
         self.camera_label.grid(row=0, column=0, sticky="nsew", padx=(0, 15))
 
+        # Feedback panel — same grid cell, shown instead of camera during feedback state
+        self._feedback_panel = ctk.CTkFrame(main, fg_color="#000000", corner_radius=0)
+        self._feedback_panel_visible = False
+        self._feedback_round_label = ctk.CTkLabel(
+            self._feedback_panel, text="",
+            font=ctk.CTkFont(size=22, weight="bold"), text_color="#00dcff")
+        self._feedback_round_label.pack(anchor="w", padx=30, pady=(24, 12))
+        self._feedback_body = ctk.CTkTextbox(
+            self._feedback_panel,
+            fg_color="#111111", text_color="white",
+            font=ctk.CTkFont(size=18), wrap="word",
+            corner_radius=8, state="disabled")
+        self._feedback_body.pack(fill="both", expand=True, padx=30, pady=(0, 24))
+
         right = ctk.CTkFrame(main)
         right.grid(row=0, column=1, sticky="nsew")
 
@@ -180,39 +194,6 @@ class SessionViewFrame(ctk.CTkFrame):
             bar_width = int(min(1.0, elapsed / self._exercise_secs) * w)
             cv2.rectangle(display, (0, h - 8), (bar_width, h), (0, 200, 255), -1)
 
-        elif state == "feedback":
-            overlay = display.copy()
-            cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
-            cv2.addWeighted(overlay, 0.65, display, 0.35, 0, display)
-
-            round_num = result["round_number"]
-            cv2.putText(display, f"Round {round_num} Feedback",
-                        (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 220, 255), 2)
-
-            lines_to_draw = self._feedback_lines
-            line_height = 30
-            y_cursor = 80
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            for line in lines_to_draw:
-                words = line.split()
-                rows = []
-                current = ""
-                for word in words:
-                    test = current + " " + word if current else word
-                    if len(test) > 70:
-                        if current:
-                            rows.append(current)
-                        current = word
-                    else:
-                        current = test
-                if current:
-                    rows.append(current)
-                for row in rows:
-                    if y_cursor < h - 40:
-                        cv2.putText(display, row, (20, y_cursor),
-                                    font, 0.55, (255, 255, 255), 1)
-                        y_cursor += line_height
-
         # Handle countdown speech
         countdown_speak = result.get("countdown_speak")
         if countdown_speak is not None and state == "countdown":
@@ -228,14 +209,21 @@ class SessionViewFrame(ctk.CTkFrame):
             self._tts.speak_immediate(". ".join(feedback_lines))
             self._feedback_end_scheduled = False
 
+        # Show/hide feedback panel based on state
+        if state == "feedback" and not self._feedback_panel_visible:
+            self._show_feedback_panel(result["round_number"])
+        elif state != "feedback" and self._feedback_panel_visible:
+            self._hide_feedback_panel()
+
         # Poll: once feedback speech finishes, move to next countdown
         if state == "feedback" and not getattr(self, "_feedback_end_scheduled", False):
             if not self._tts.is_speaking():
                 self._feedback_end_scheduled = True
                 self._session.end_feedback()
 
-        # Update camera (clean — no overlaid text on the video)
-        self._update_camera(display, pose_frame)
+        # Update camera only when it is visible
+        if not self._feedback_panel_visible:
+            self._update_camera(display, pose_frame)
 
         # Update sidebar joint value labels during exercise
         if state == "exercise" and pose_frame is not None and self._joint_value_labels:
@@ -304,6 +292,25 @@ class SessionViewFrame(ctk.CTkFrame):
             if key in self._BEND_FIELDS:
                 val = 180.0 - float(val)
             lbl.configure(text=f"{float(val):.1f}°")
+
+    def _show_feedback_panel(self, round_number: int):
+        """Replace camera with the feedback text panel."""
+        self._feedback_round_label.configure(text=f"Round {round_number}  —  Feedback")
+        lines = [ln.strip() for ln in self._feedback_lines if ln.strip()]
+        body_text = "\n\n".join(lines)
+        self._feedback_body.configure(state="normal")
+        self._feedback_body.delete("1.0", "end")
+        self._feedback_body.insert("1.0", body_text)
+        self._feedback_body.configure(state="disabled")
+        self.camera_label.grid_remove()
+        self._feedback_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 15))
+        self._feedback_panel_visible = True
+
+    def _hide_feedback_panel(self):
+        """Restore camera view."""
+        self._feedback_panel.grid_remove()
+        self.camera_label.grid(row=0, column=0, sticky="nsew", padx=(0, 15))
+        self._feedback_panel_visible = False
 
     def _end_session(self):
         self._engine.stop()
