@@ -122,4 +122,13 @@ def calculate_angles(keypoints: dict) -> dict:
         "trunk_lean_2d":       _trunk_lean_2d(hip_mid, shoulder_mid),
         "left_knee_valgus":    _signed_knee_valgus(lm("left_hip"),  lm("left_knee"),  lm("left_ankle"),  "left"),
         "right_knee_valgus":   _signed_knee_valgus(lm("right_hip"), lm("right_knee"), lm("right_ankle"), "right"),
+        # Segment-from-vertical angles — primary for side view, also useful front view
+        # Convention: 0° = segment vertical, increases as segment tilts away from vertical
+        "left_shin_angle":     _trunk_lean_2d(lm("left_ankle"),  lm("left_knee")),
+        "right_shin_angle":    _trunk_lean_2d(lm("right_ankle"), lm("right_knee")),
+        "left_thigh_angle":    _trunk_lean_2d(lm("left_knee"),   lm("left_hip")),
+        "right_thigh_angle":   _trunk_lean_2d(lm("right_knee"),  lm("right_hip")),
+        # Bilateral tilt angles — primary for front view
+        # Convention: 0° = both landmarks level, increases as one side is higher/lower
+        "shoulder_tilt":       _vector_to_horizontal_angle(lm("left_shoulder"), lm("right_shoulder")),
     }

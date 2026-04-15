@@ -32,6 +32,11 @@ class PoseFrame:
     trunk_lean_2d: float = 0.0
     left_knee_valgus: float = 0.0
     right_knee_valgus: float = 0.0
+    left_shin_angle: float = 0.0
+    right_shin_angle: float = 0.0
+    left_thigh_angle: float = 0.0
+    right_thigh_angle: float = 0.0
+    shoulder_tilt: float = 0.0
     keypoints: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:

@@ -183,3 +183,89 @@ def test_elbow_bend_2d_bent_arm():
     result = calculate_angles(kp)
     assert result["left_elbow_bend_2d"] > 90.0, \
         f"Bent arm should give >90° bend, got {result['left_elbow_bend_2d']:.1f}°"
+
+
+def _full_kp(**overrides):
+    """Return a full keypoints dict with all landmarks at (0.5, 0.5) unless overridden."""
+    base = {name: (0.5, 0.5, 0.0, 1.0) for name in [
+        "left_hip", "left_knee", "left_ankle", "left_foot_index",
+        "right_hip", "right_knee", "right_ankle", "right_foot_index",
+        "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
+        "left_wrist", "right_wrist", "left_index", "right_index", "nose",
+    ]}
+    base.update(overrides)
+    return base
+
+
+def test_calculate_angles_includes_new_segment_keys():
+    """Five new segment/tilt fields must be present in calculate_angles output."""
+    result = calculate_angles(_full_kp())
+    for key in ["left_shin_angle", "right_shin_angle",
+                "left_thigh_angle", "right_thigh_angle", "shoulder_tilt"]:
+        assert key in result, f"Missing key: {key}"
+
+
+def test_shin_angle_vertical():
+    """Shin perfectly vertical → ~0°."""
+    kp = _full_kp(
+        left_ankle=(0.4, 0.9, 0.0, 1.0),
+        left_knee= (0.4, 0.5, 0.0, 1.0),  # directly above ankle
+    )
+    result = calculate_angles(kp)
+    assert result["left_shin_angle"] < 2.0, \
+        f"Vertical shin should give ~0°, got {result['left_shin_angle']:.1f}°"
+
+
+def test_shin_angle_tilted():
+    """Shin tilted forward (ankle behind knee) → angle > 0°."""
+    kp = _full_kp(
+        left_ankle=(0.5, 0.9, 0.0, 1.0),
+        left_knee= (0.4, 0.5, 0.0, 1.0),  # knee shifted forward of ankle
+    )
+    result = calculate_angles(kp)
+    assert result["left_shin_angle"] > 5.0, \
+        f"Tilted shin should give >5°, got {result['left_shin_angle']:.1f}°"
+
+
+def test_thigh_angle_standing():
+    """Thigh vertical (standing) → ~0°."""
+    kp = _full_kp(
+        left_knee=(0.4, 0.7, 0.0, 1.0),
+        left_hip= (0.4, 0.3, 0.0, 1.0),  # directly above knee
+    )
+    result = calculate_angles(kp)
+    assert result["left_thigh_angle"] < 2.0, \
+        f"Standing thigh should give ~0°, got {result['left_thigh_angle']:.1f}°"
+
+
+def test_thigh_angle_parallel_squat():
+    """Thigh horizontal (parallel squat) → ~90°."""
+    kp = _full_kp(
+        left_knee=(0.4, 0.5, 0.0, 1.0),
+        left_hip= (0.7, 0.5, 0.0, 1.0),  # hip at same height as knee → horizontal thigh
+    )
+    result = calculate_angles(kp)
+    assert abs(result["left_thigh_angle"] - 90.0) < 2.0, \
+        f"Parallel-squat thigh should give ~90°, got {result['left_thigh_angle']:.1f}°"
+
+
+def test_shoulder_tilt_level():
+    """Level shoulders → ~0°."""
+    kp = _full_kp(
+        left_shoulder= (0.3, 0.3, 0.0, 1.0),
+        right_shoulder=(0.7, 0.3, 0.0, 1.0),  # same y → level
+    )
+    result = calculate_angles(kp)
+    assert result["shoulder_tilt"] < 2.0, \
+        f"Level shoulders should give ~0°, got {result['shoulder_tilt']:.1f}°"
+
+
+def test_shoulder_tilt_dropped():
+    """One shoulder lower than the other → tilt > 0°."""
+    kp = _full_kp(
+        left_shoulder= (0.3, 0.3, 0.0, 1.0),
+        right_shoulder=(0.7, 0.5, 0.0, 1.0),  # right shoulder lower (higher y)
+    )
+    result = calculate_angles(kp)
+    assert result["shoulder_tilt"] > 10.0, \
+        f"Dropped shoulder should give >10°, got {result['shoulder_tilt']:.1f}°"
