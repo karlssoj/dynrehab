@@ -6,69 +6,62 @@ from core.video_analyzer import analyze_reference_video
 from physio_app.services.exercise_service import ExerciseService
 
 _POSE_DATA_DESCRIPTION = """\
-The `pose_data` dict has these fields (all angles in degrees, calculated in 3D using x,y,z):
+The `pose_data` dict has these fields (all angles in degrees, computed from x,y only — z is ignored):
   timestamp: float — seconds since session start
-  left_knee_angle / right_knee_angle — raw 3-point angle; ~170° standing, ~90° deep squat
-  left_hip_angle / right_hip_angle — raw 3-point angle; ~180° standing, ~90° hip flexion
-  left_ankle_angle / right_ankle_angle — knee-ankle-foot_index angle
-  left_shoulder_angle / right_shoulder_angle — elbow-shoulder-hip angle
-  left_elbow_angle / right_elbow_angle — raw 3-point angle; ~180° straight, ~45° fully bent
-    (3D; noisy on side view — use left_elbow_bend_2d / right_elbow_bend_2d instead)
-  left_wrist_angle / right_wrist_angle — elbow-wrist-index_finger angle
-  trunk_lean_angle — trunk from vertical; 0°=upright, increases when leaning forward
-    (3D; noisy on side view — use trunk_lean_2d instead)
-  neck_angle — angle at shoulder-midpoint between trunk direction and nose
-  pelvic_tilt — left-hip→right-hip line from horizontal.
-    WARNING: this field is unreliable for front-facing camera — reads ~180° when level.
+  left_knee_angle / right_knee_angle — 2D angle at knee; ~170° standing, ~90° deep squat
+  left_hip_angle / right_hip_angle — 2D angle at hip; ~180° standing, ~90° hip flexion
+  left_ankle_angle / right_ankle_angle — 2D knee-ankle-foot_index angle
+  left_shoulder_angle / right_shoulder_angle — 2D elbow-shoulder-hip angle
+  left_elbow_angle / right_elbow_angle — 2D angle at elbow; ~180° straight, ~45° fully bent
+  left_wrist_angle / right_wrist_angle — 2D elbow-wrist-index_finger angle
+  trunk_lean_angle / trunk_lean_2d — trunk lean from vertical; 0°=upright, increases when leaning.
+    Both fields are identical (x,y only).
+  neck_angle — 2D angle at shoulder-midpoint between trunk direction and nose
+  pelvic_tilt — left-hip→right-hip line from horizontal. ~0° when hips level.
+    WARNING: unreliable for front-facing camera — reads ~180° when level.
     For frontal exercises compute pelvic tilt from keypoints directly (see helper below).
-  left_hka_alignment / right_hka_alignment — frontal-plane hip-knee-ankle angle; ~180°=straight.
-    WARNING: this is a SCALAR angle — it decreases for BOTH valgus (inward) AND varus (outward).
-    Do NOT use hka_alignment < threshold to detect valgus; it is directionless.
-    For frontal-view valgus detection use the _knee_lateral_deviation helper below instead.
-  left_arm_elevation / right_arm_elevation — angle at the shoulder between the shoulder-hip line and the shoulder-wrist line; 0°=arm hanging at side, 90°=arm horizontal, 180°=arm straight overhead. Use this for shoulder flexion/extension/abduction exercises.
-  --- RELIABLE PRE-COMPUTED VALUES (prefer these over keypoint helpers) ---
-  left_elbow_bend_2d / right_elbow_bend_2d — elbow bend, x,y only. 0°=arm straight,
-    ~135°=fully curled. USE THIS for arm curl / bicep curl exercises.
-  left_knee_bend_2d / right_knee_bend_2d — knee bend, x,y only. 0°=leg straight,
-    ~90°=deep squat. USE THIS for side-view squat and lunge exercises.
-  left_hip_bend_2d / right_hip_bend_2d — hip flexion, x,y only. 0°=trunk upright,
-    increases as hip flexes. USE THIS for side-view hip hinge exercises.
-  trunk_lean_2d — trunk lean from vertical, x,y only. 0°=upright, increases leaning.
-    USE THIS instead of trunk_lean_angle for all side-view exercises.
+  left_hka_alignment / right_hka_alignment — 2D hip-knee-ankle angle; ~180°=straight.
+    WARNING: SCALAR — decreases for BOTH valgus and varus. Do NOT use to detect valgus direction.
+    Use left_knee_valgus / right_knee_valgus instead.
+  left_arm_elevation / right_arm_elevation — 2D shoulder-hip to shoulder-wrist angle;
+    0°=arm at side, 90°=arm horizontal, 180°=arm overhead.
+  --- PRE-COMPUTED BEND VALUES (0°=straight convention, prefer these) ---
+  left_elbow_bend_2d / right_elbow_bend_2d — 0°=arm straight, ~135°=fully curled.
+    Equals 180 − left_elbow_angle. USE THIS for arm curl / bicep curl exercises.
+  left_knee_bend_2d / right_knee_bend_2d — 0°=leg straight, ~90°=deep squat.
+    Equals 180 − left_knee_angle. USE THIS for squat and lunge exercises (front and side view).
+    For front-view squats this captures hip descent in y-coordinates: hips drop to knee
+    level at ~90° bend, providing a reliable depth estimate without z-depth.
+  left_hip_bend_2d / right_hip_bend_2d — 0°=trunk upright, increases as hip flexes.
+    USE THIS for hip hinge exercises.
   left_knee_valgus / right_knee_valgus — SIGNED lateral knee deviation (normalised units).
     Positive = valgus (knee inward/medial), negative = varus (knee outward/lateral).
-    Threshold: ±0.03 normalised units = clinically meaningful. ±0.05 = clearly visible.
-    USE THIS for front-view squat/lunge valgus/varus detection instead of hka_alignment.
+    Threshold: ±0.03 = clinically meaningful. ±0.05 = clearly visible.
+    USE THIS for front-view valgus/varus detection.
   keypoints: dict[str, tuple[float,float,float,float]] — name→(x,y,z,visibility)
-    x,y in [0,1] (y increases downward), z=depth, visibility in [0,1]
+    x,y in [0,1] (y increases downward), visibility in [0,1]
     landmark names: nose, left_shoulder, right_shoulder, left_elbow, right_elbow,
     left_wrist, right_wrist, left_hip, right_hip, left_knee, right_knee,
     left_ankle, right_ankle, left_foot_index, right_foot_index, left_heel, right_heel
 
-ANGLE CONVENTION (use this consistently across ALL exercises):
+ANGLE CONVENTION (use consistently across ALL exercises):
   0° = fully straight / fully extended joint
   Higher values = more bent / more flexed
-  This means: for elbow, knee, hip — compute BEND AMOUNT = 180° − raw_angle.
-  Example: raw knee angle 90° → knee_bend = 180 − 90 = 90° (deeply bent).
-           raw knee angle 170° → knee_bend = 180 − 170 = 10° (nearly straight).
-  The _elbow_bend_2d helper in the example already uses this convention.
-  Always write helpers for other joints the same way: 0=straight, higher=more bent.
+  Use bend amount = 180° − raw_angle (already pre-computed as _bend_2d fields).
+  Example: raw knee angle 90° → knee_bend = 90° (deeply bent).
+           raw knee angle 170° → knee_bend = 10° (nearly straight).
 
-HELPER PATTERN for knee/hip/ankle bend (use x,y only — immune to z-depth noise):
-  NOTE: knee, hip, and elbow bend are now pre-computed in pose_data (left_knee_bend_2d,
-  left_hip_bend_2d, left_elbow_bend_2d, etc.) — use those directly. The helper below is
-  kept for reference and for computing ankle bend or other custom angles.
-  def _knee_bend_2d(pose_data, side):
+HELPER PATTERN for custom angles (x,y only):
+  NOTE: knee, hip, and elbow bend are pre-computed in pose_data (_bend_2d fields).
+  Use them directly. The helper below is for ankle bend or other custom angles.
+  def _ankle_bend_2d(pose_data, side):
       kpts = pose_data.get("keypoints", {})
-      h = kpts.get(f"{side}_hip")
       k = kpts.get(f"{side}_knee")
       a = kpts.get(f"{side}_ankle")
-      if not (h and k and a) or min(h[3], k[3], a[3]) < _VIS_THRESHOLD:
+      f = kpts.get(f"{side}_foot_index")
+      if not (k and a and f) or min(k[3], a[3], f[3]) < _VIS_THRESHOLD:
           return 0.0
-      return 180.0 - _angle_2d(h[0], h[1], k[0], k[1], a[0], a[1])
-  # Returns 0 when leg is straight, increases as knee bends.
-  # Same pattern applies for _hip_bend_2d (shoulder, hip, knee) and
-  # _ankle_bend_2d (knee, ankle, foot_index).
+      return 180.0 - _angle_2d(k[0], k[1], a[0], a[1], f[0], f[1])
 
 HELPER PATTERN for frontal-view pelvic tilt (do not use pose_data["pelvic_tilt"]):
   def _pelvic_tilt_2d(pose_data):
@@ -187,17 +180,12 @@ def get_relevant_joints() -> list:
     # If no Display Values were specified, return the 1-2 most clinically relevant joints.
     # Keep display labels short (≤ 12 chars) — they appear in a narrow sidebar.
     #
-    # DISPLAY KEY SELECTION — camera view matters:
-    #   FRONT-VIEW squats/lunges: use "left_knee_angle" / "right_knee_angle"
-    #     These are 3D and capture depth (z), so the value changes as the knee bends.
-    #     Do NOT use "left_knee_bend_2d" for front-view — it uses x,y only and barely
-    #     changes during a front-view squat because the bend happens in depth (z).
-    #   SIDE-VIEW squats/lunges: use "left_knee_bend_2d" / "right_knee_bend_2d"
-    #     These are more reliable from the side (immune to z-depth noise).
-    #   The UI automatically converts "left_knee_angle" / "right_knee_angle" and other
-    #   raw angle fields to 0°=straight convention, so no manual inversion is needed.
-    # Example (front): [("L knee", "left_knee_angle"), ("R knee", "right_knee_angle")]
-    # Example (side):  [("Knee bend", "left_knee_bend_2d"), ("Trunk", "trunk_lean_2d")]
+    # All angles are now computed from x,y only, so the same keys work for both
+    # front-view and side-view exercises.
+    # For squats/lunges: use "left_knee_bend_2d" / "right_knee_bend_2d" (0=straight).
+    # The UI automatically converts raw angle fields (left_knee_angle etc.) to 0=straight
+    # convention, so either form is safe to use.
+    # Example: [("L knee bend", "left_knee_bend_2d"), ("R knee bend", "right_knee_bend_2d")]
 
 def get_session_summary(session_data: dict) -> str:
     # REQUIRED. Called once when the patient ends the session.
@@ -625,8 +613,8 @@ Rules:
 - Use module-level variables for state (rep phase tracking, etc.).
 - Implement get_instructions, detect_rep, reset_round, generate_round_feedback, and get_session_summary. The required functions are detect_rep, generate_round_feedback, and get_session_summary.
 - Feedback language: use plain verbal coaching by default. Only include numeric angle values if the physiotherapist's instructions explicitly request them.
-- For side-view exercises, compute elbow/hip/knee bend AND trunk lean from keypoints x,y only (like _elbow_bend_2d and _trunk_lean_2d in the example). Do NOT use left/right_elbow_angle, left/right_hip_angle, or trunk_lean_angle directly — they are 3D and z-depth noise inflates them in side view.
-- Use a CONSISTENT angle convention across all helpers: 0° = fully straight, higher = more bent/flexed. Always compute bend amount as (180° − raw_angle) so thresholds are comparable regardless of exercise. E.g. knee_bend_2d = 180 − knee_2d_angle, hip_bend_2d = 180 − hip_2d_angle.
+- All angles in pose_data are computed from x,y only (z is ignored). You may use left/right_elbow_angle, trunk_lean_angle etc. directly — they are already 2D. Prefer the pre-computed _bend_2d fields (0=straight convention) wherever available.
+- Use a CONSISTENT angle convention across all helpers: 0° = fully straight, higher = more bent/flexed. Always compute bend amount as (180° − raw_angle).
 - For frontal-view exercises: do NOT use pose_data["pelvic_tilt"] — compute _pelvic_tilt_2d from keypoints instead. Do NOT use hka_alignment < threshold to detect knee valgus — it is a scalar angle that fires for both valgus AND varus. Use _knee_lateral_deviation from keypoints (positive = inward) and only flag valgus when the value is actually positive above a threshold.
 - For lying, seated, or kneeling exercises: do NOT use trunk lean as the primary detection signal. Use the bend helper for the joint being exercised (_knee_bend_2d, _elbow_bend_2d, etc.). Set the 'return to straight' threshold at ~15-20° bend to account for natural resting position noise.
 - Implement get_relevant_joints() returning 1-4 (label, pose_data_key) pairs for the joints most relevant to this exercise. Use keys that exist in pose_data (e.g. "left_knee_angle", "trunk_lean_angle", "left_arm_elevation").
