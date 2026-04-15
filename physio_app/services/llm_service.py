@@ -129,14 +129,17 @@ def get_instructions() -> list[str]:
     # Keep it brief — it is spoken aloud immediately before the countdown starts.
 
 def detect_rep(pose_data: dict) -> bool:
-    # REQUIRED. Called every frame during the 10-second exercise window.
-    # Return True exactly once when a complete rep is detected. Silent — no feedback.
-    # Use LOOSE thresholds — count any recognizable attempt at the motion.
-    # A patient with poor form must still get reps counted so generate_round_feedback
-    # can give specific guidance.
+    # REQUIRED. Called every frame during the exercise window.
+    # Return True exactly once when a rep attempt is detected. Silent — no feedback.
+    # CRITICAL: Do NOT use the physiotherapist's boundary values as detection thresholds.
+    # Boundary values are quality targets for feedback — they are NOT gates for counting reps.
+    # A patient who squats to 60° when the boundary is 90° MUST still have a rep counted
+    # so generate_round_feedback() can coach them on the gap.
+    # Use your own LOOSE anatomical thresholds (e.g. any knee bend > 20° counts as a squat
+    # attempt, any elbow bend > 20° counts as a curl attempt).
     # Use a simple phase state machine: ready → moving → ready.
     # For exercises where a joint moves away from rest and returns:
-    #   Phase "moving" starts when angle crosses threshold in movement direction
+    #   Phase "moving" starts when angle crosses a LOOSE threshold in movement direction
     #   Rep counted when angle returns past a separate return threshold
     # Use module-level variables for phase state. reset_round() resets them.
 
@@ -145,7 +148,7 @@ def reset_round():
     # Reset phase back to "ready" or "start", clear any history deques, etc.
 
 def generate_round_feedback(round_data: dict) -> list[str]:
-    # REQUIRED. Called once after each 10-second exercise window.
+    # REQUIRED. Called once after each exercise window.
     # round_data: {
     #   "round_number": int,
     #   "rep_count": int,
@@ -153,9 +156,18 @@ def generate_round_feedback(round_data: dict) -> list[str]:
     #   "duration_seconds": float
     # }
     # Return 2-4 spoken sentences as a list of strings.
+    # BOUNDARY VALUES USAGE: The physiotherapist's boundary values are quality targets.
+    # Compare the patient's actual measured values (from frames) against those targets
+    # and report HOW CLOSE they came. Describe the gap and give specific coaching.
+    # NEVER return "no movement detected" or similar if frames contain any recognizable
+    # movement attempt — even a partial attempt deserves specific feedback.
+    # "No movement" should only appear if frames show literally no joint movement
+    # (e.g. the patient walked away from camera or was completely still).
     # - ALWAYS run all quality checks (pelvic tilt, knee valgus, trunk lean, etc.)
     #   regardless of rep_count. Do NOT return early after the rep-count message.
-    # - If rep_count is 0, open with a depth/movement cue, then continue with quality checks.
+    # - If rep_count is 0 but movement was detected in frames: describe what the patient
+    #   did ("you squatted about halfway down") and what they need to do differently
+    #   ("bend your knees further — aim for a deeper squat").
     # - If rep_count > 0, open with acknowledgement + depth feedback, then quality checks.
     # - Give verbal coaching cues a physiotherapist would say out loud.
     #   Describe movement quality in plain language ("bend your arms more",
@@ -578,7 +590,7 @@ Client instructions (spoken to patient before and during exercise):
 Analysis instructions (what to look for and what feedback to give):
 {llm_instructions}
 
-Boundary values (specific thresholds the physiotherapist requires):
+Boundary values (quality targets for generate_round_feedback — NOT thresholds for detect_rep. detect_rep must count any recognizable movement attempt using its own loose anatomical thresholds, independently of these values):
 {boundary_values}
 
 Display values (which values to show on screen during motion analysis):
