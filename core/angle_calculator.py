@@ -66,13 +66,16 @@ def _trunk_lean_2d(a: tuple, b: tuple) -> float:
 def _signed_knee_valgus(hip: tuple, knee: tuple, ankle: tuple, side: str) -> float:
     """Signed lateral knee deviation from the hip-ankle midpoint x position.
     Positive = valgus (knee inward/medial), negative = varus (knee outward/lateral).
-    Designed for front-facing camera. Values in normalised [0,1] x coordinates.
+    Designed for front-facing camera.
     For front camera: patient's LEFT leg appears on the RIGHT of the image (higher x),
     so left-leg inward movement = lower x → negate raw for consistent sign.
+    Value is multiplied by 100 so typical deviations are in the range ±1 to ±10
+    rather than ±0.01 to ±0.10 (raw normalised units), making the number displayable.
+    Threshold guidance: ±3 = clinically meaningful, ±5 = clearly visible.
     """
     midpoint_x = (hip[0] + ankle[0]) / 2.0
     raw = knee[0] - midpoint_x
-    return float(-raw if side == "left" else raw)
+    return float((-raw if side == "left" else raw) * 100.0)
 
 
 def calculate_angles(keypoints: dict) -> dict:

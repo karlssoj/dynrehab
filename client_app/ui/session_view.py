@@ -287,6 +287,9 @@ class SessionViewFrame(ctk.CTkFrame):
             val_lbl.pack(side="right")
             self._joint_value_labels[key] = val_lbl
 
+    # Valgus fields are dimensionless scaled units, not degrees
+    _VALGUS_FIELDS = {"left_knee_valgus", "right_knee_valgus"}
+
     def _update_joint_labels(self, pose_frame: PoseFrame):
         """Refresh the sidebar value labels from the current pose frame."""
         for key, lbl in self._joint_value_labels.items():
@@ -294,9 +297,13 @@ class SessionViewFrame(ctk.CTkFrame):
             if val is None:
                 lbl.configure(text="—")
                 continue
+            val = float(val)
             if key in self._BEND_FIELDS:
-                val = 180.0 - float(val)
-            lbl.configure(text=f"{float(val):.1f}°")
+                val = 180.0 - val
+            if key in self._VALGUS_FIELDS:
+                lbl.configure(text=f"{val:+.1f}")   # show sign: +3.2 / -1.4
+            else:
+                lbl.configure(text=f"{val:.1f}°")
 
     def _show_feedback_panel(self, round_number: int):
         """Replace camera with the feedback text panel."""

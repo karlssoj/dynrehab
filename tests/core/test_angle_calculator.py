@@ -94,7 +94,7 @@ def test_signed_knee_valgus_left_neutral():
     hip = (0.6, 0.3, 0.0, 1.0)
     ankle = (0.5, 0.9, 0.0, 1.0)   # midpoint_x = 0.55
     knee = (0.55, 0.6, 0.0, 1.0)   # knee exactly at midpoint
-    assert abs(_signed_knee_valgus(hip, knee, ankle, "left")) < 0.001
+    assert abs(_signed_knee_valgus(hip, knee, ankle, "left")) < 0.1
 
 
 def test_signed_knee_valgus_left_valgus():
