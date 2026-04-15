@@ -318,14 +318,13 @@ class SessionViewFrame(ctk.CTkFrame):
         self._feedback_panel_visible = False
 
     def _end_session(self):
+        self._tts.stop()
         self._engine.stop()
         self._engine.unsubscribe(self._on_frame)
-        speech = self._session.get_session_summary_speech() if self._session else ""
-        if speech:
-            self._tts.speak_immediate(speech)
         self.app.show_launcher()
 
     def _go_home(self):
+        self._tts.stop()
         self._engine.stop()
         self._engine.unsubscribe(self._on_frame)
         self.app.show_launcher()

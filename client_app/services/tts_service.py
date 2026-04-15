@@ -34,6 +34,20 @@ class TTSService:
             self._last_spoken_at = time.time()
         self._queue.put(message)
 
+    def stop(self):
+        """Immediately stop any ongoing speech and discard queued messages."""
+        # Drain the queue
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+        # Kill the current subprocess if running
+        with self._lock:
+            proc = self._current_proc
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+
     def _worker(self):
         while True:
             if self._current_proc is None or self._current_proc.poll() is not None:
