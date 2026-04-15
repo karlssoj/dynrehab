@@ -208,6 +208,7 @@ class SessionViewFrame(ctk.CTkFrame):
             self._feedback_lines = list(feedback_lines)
             self._tts.speak_immediate(". ".join(feedback_lines))
             self._feedback_end_scheduled = False
+            self._feedback_tts_started = False   # must observe TTS speaking before ending
 
         # Show/hide feedback panel based on state
         if state == "feedback" and not self._feedback_panel_visible:
@@ -215,9 +216,13 @@ class SessionViewFrame(ctk.CTkFrame):
         elif state != "feedback" and self._feedback_panel_visible:
             self._hide_feedback_panel()
 
-        # Poll: once feedback speech finishes, move to next countdown
+        # Poll: wait until TTS has been observed speaking, then end when it stops.
+        # Two-stage guard prevents firing on the same frame as speak_immediate() when
+        # the TTS thread hasn't started yet and is_speaking() still returns False.
         if state == "feedback" and not getattr(self, "_feedback_end_scheduled", False):
-            if not self._tts.is_speaking():
+            if self._tts.is_speaking():
+                self._feedback_tts_started = True
+            if getattr(self, "_feedback_tts_started", False) and not self._tts.is_speaking():
                 self._feedback_end_scheduled = True
                 self._session.end_feedback()
 
