@@ -50,8 +50,15 @@ Fields marked [BOTH] are useful from either view.
 --- SIGNED VALGUS ANGLE ---
   left_knee_valgus / right_knee_valgus [FRONT] — signed angular deviation of knee from hip-ankle line (degrees).
     0° = hip, knee, ankle perfectly collinear (straight alignment).
-    Positive = valgus (knee inward/medial), negative = varus (knee outward/lateral).
+    Positive = valgus (knee inward/medial = knees caving in).
+    Negative = varus (knee outward/lateral = knees bowing out).
     Threshold: ±3° = clinically meaningful. ±5° = clearly visible. ±10° = severe.
+    IMPORTANT: NEVER use abs() — the sign is the direction. Use it like this:
+      if pose_data["left_knee_valgus"] > 5:
+          # knee caving inward (valgus)
+      elif pose_data["left_knee_valgus"] < -5:
+          # knee bowing outward (varus)
+      # values between -5 and +5 are acceptable alignment
 
 --- KEYPOINTS ---
   keypoints: dict[str, tuple[float,float,float,float]] — name→(x,y,z,visibility)
