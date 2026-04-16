@@ -104,29 +104,29 @@ HELPER PATTERN for frontal-view pelvic tilt (do not use pose_data["pelvic_tilt"]
           return 90.0
       return math.degrees(math.atan2(dy, dx))
 
-HELPER PATTERN for frontal-view valgus (knee caving inward) detection:
-  NOTE: Knee valgus is now pre-computed as left_knee_valgus / right_knee_valgus in pose_data
-  — use those directly. The helper below is kept for reference.
-  Because hka_alignment is directionless, use lateral knee deviation from keypoints:
+FRONTAL-VIEW VALGUS — use pre-computed fields, do NOT recompute from keypoints:
+  left_knee_valgus / right_knee_valgus are already the signed angular deviation.
+  Positive = valgus (knee caving inward), Negative = varus (knee bowing outward).
+  Example usage:
+    if pose_data["left_knee_valgus"] > 5:
+        # knee caving inward (valgus)
+    elif pose_data["left_knee_valgus"] < -5:
+        # knee bowing outward (varus)
+  NEVER use hka_alignment to detect direction — it is unsigned and fires for both.
+  NEVER recompute from keypoints — left_knee_valgus / right_knee_valgus are correct and ready.
 
-  def _knee_lateral_deviation(pose_data, side):
-      # Returns positive if knee is MEDIAL (valgus/inward), negative if LATERAL (varus/outward).
-      # Requires front-facing camera. Accounts for the mirror effect: patient's LEFT
-      # appears on the RIGHT side of the image (high x), RIGHT on the left (low x).
-      kpts = pose_data.get("keypoints", {})
-      h = kpts.get(f"{side}_hip")
-      k = kpts.get(f"{side}_knee")
-      a = kpts.get(f"{side}_ankle")
-      if not (h and k and a) or min(h[3], k[3], a[3]) < _VIS_THRESHOLD:
-          return 0.0
-      midpoint_x = (h[0] + a[0]) / 2.0
-      raw = k[0] - midpoint_x
-      # Left leg: inward = lower x in image → negate so positive = inward
-      # Right leg: inward = higher x in image → keep sign
-      return -raw if side == "left" else raw
-
-  # Valgus check: _knee_lateral_deviation(pose_data, "left") > VALGUS_THRESHOLD
-  # A value of 0.02–0.03 (in normalised [0,1] x coords) is a meaningful threshold.
+SIDE-VIEW SPECIFIC — knees over toes / shin forward lean:
+  left_shin_angle / right_shin_angle = angle of shin (ankle→knee) from vertical.
+  0° = shin perfectly vertical (knee directly above ankle).
+  Increases as the knee travels forward past the toes.
+  Typical acceptable range during squats: up to ~30°. Above ~35-40° = knees too far forward.
+  This is the ONLY reliable field for detecting knees-over-toes. It requires a SIDE-VIEW camera.
+  From a FRONT-VIEW camera, shin_angle measures lateral shin tilt (not forward lean) and
+  CANNOT be used to detect knees over toes — do NOT attempt this from a front view.
+  Example side-view usage:
+    avg_shin = statistics.mean(f["left_shin_angle"] for f in frames if f["left_shin_angle"] > 1)
+    if avg_shin > 35:
+        feedback.append("Your knees are travelling too far over your toes — shift your weight back.")
 
 LYING / SEATED / KNEELING exercises:
   _trunk_lean_2d() ONLY works when the patient is standing upright.
@@ -651,7 +651,7 @@ Rules:
 - Feedback language: use plain verbal coaching by default. Only include numeric angle values if the physiotherapist's instructions explicitly request them.
 - All angles in pose_data are computed from x,y only (z is ignored). You may use left/right_elbow_angle, trunk_lean_angle etc. directly — they are already 2D. Prefer the pre-computed _bend_2d fields (0=straight convention) wherever available.
 - Use a CONSISTENT angle convention across all helpers: 0° = fully straight, higher = more bent/flexed. Always compute bend amount as (180° − raw_angle).
-- For frontal-view exercises: do NOT use pose_data["pelvic_tilt"] — compute _pelvic_tilt_2d from keypoints instead. Do NOT use hka_alignment < threshold to detect knee valgus — it is a scalar angle that fires for both valgus AND varus. Use _knee_lateral_deviation from keypoints (positive = inward) and only flag valgus when the value is actually positive above a threshold.
+- For frontal-view exercises: do NOT use pose_data["pelvic_tilt"] — compute _pelvic_tilt_2d from keypoints instead. Do NOT use hka_alignment to detect knee valgus direction — it is unsigned and fires for both valgus and varus. Use pose_data["left_knee_valgus"] / pose_data["right_knee_valgus"] directly (positive = inward/valgus, negative = outward/varus). Do NOT attempt to detect knees-over-toes from a front view — it requires a side-view camera and shin_angle.
 - For lying, seated, or kneeling exercises: do NOT use trunk lean as the primary detection signal. Use the bend helper for the joint being exercised (_knee_bend_2d, _elbow_bend_2d, etc.). Set the 'return to straight' threshold at ~15-20° bend to account for natural resting position noise.
 - Implement get_relevant_joints() returning 1-4 (label, pose_data_key) pairs for the joints most relevant to this exercise. Use keys that exist in pose_data (e.g. "left_knee_angle", "trunk_lean_angle", "left_arm_elevation").
 - Return ONLY valid Python code. No markdown fences. No explanations.
