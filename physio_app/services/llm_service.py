@@ -47,10 +47,11 @@ Fields marked [BOTH] are useful from either view.
   shoulder_tilt [FRONT] — left-shoulder→right-shoulder line from horizontal.
     0°=shoulders level. Detects dropped shoulder, useful for overhead press, scoliosis.
 
---- SIGNED LATERAL DEVIATION ---
-  left_knee_valgus / right_knee_valgus [FRONT] — signed knee deviation (scaled units, ×100).
+--- SIGNED VALGUS ANGLE ---
+  left_knee_valgus / right_knee_valgus [FRONT] — signed angular deviation of knee from hip-ankle line (degrees).
+    0° = hip, knee, ankle perfectly collinear (straight alignment).
     Positive = valgus (knee inward/medial), negative = varus (knee outward/lateral).
-    Threshold: ±3 = clinically meaningful. ±5 = clearly visible. ±10 = severe.
+    Threshold: ±3° = clinically meaningful. ±5° = clearly visible. ±10° = severe.
 
 --- KEYPOINTS ---
   keypoints: dict[str, tuple[float,float,float,float]] — name→(x,y,z,visibility)

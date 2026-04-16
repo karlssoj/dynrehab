@@ -90,42 +90,42 @@ def test_trunk_lean_2d_leaning():
 
 
 def test_signed_knee_valgus_left_neutral():
-    """Left knee on the hip-ankle line → near zero."""
+    """Left knee exactly on the hip-ankle line → 0°."""
     hip = (0.6, 0.3, 0.0, 1.0)
-    ankle = (0.5, 0.9, 0.0, 1.0)   # midpoint_x = 0.55
-    knee = (0.55, 0.6, 0.0, 1.0)   # knee exactly at midpoint
+    ankle = (0.5, 0.9, 0.0, 1.0)
+    knee = (0.55, 0.6, 0.0, 1.0)   # parametric midpoint of hip-ankle line → collinear
     assert abs(_signed_knee_valgus(hip, knee, ankle, "left")) < 0.1
 
 
 def test_signed_knee_valgus_left_valgus():
-    """Left knee medial (lower x for left leg) → positive."""
+    """Left knee medial (lower x for left leg) → positive degrees."""
     hip = (0.6, 0.3, 0.0, 1.0)
-    ankle = (0.5, 0.9, 0.0, 1.0)   # midpoint_x = 0.55
-    knee = (0.45, 0.6, 0.0, 1.0)   # knee at 0.45 < 0.55 → inward → valgus
+    ankle = (0.5, 0.9, 0.0, 1.0)
+    knee = (0.45, 0.6, 0.0, 1.0)   # knee deviated medially off hip-ankle line → valgus
     assert _signed_knee_valgus(hip, knee, ankle, "left") > 0.0
 
 
 def test_signed_knee_valgus_left_varus():
-    """Left knee lateral (higher x for left leg) → negative."""
+    """Left knee lateral (higher x for left leg) → negative degrees."""
     hip = (0.6, 0.3, 0.0, 1.0)
-    ankle = (0.5, 0.9, 0.0, 1.0)   # midpoint_x = 0.55
-    knee = (0.65, 0.6, 0.0, 1.0)   # knee at 0.65 > 0.55 → outward → varus
+    ankle = (0.5, 0.9, 0.0, 1.0)
+    knee = (0.65, 0.6, 0.0, 1.0)   # knee deviated laterally off hip-ankle line → varus
     assert _signed_knee_valgus(hip, knee, ankle, "left") < 0.0
 
 
 def test_signed_knee_valgus_right_valgus():
-    """Right knee medial (higher x for right leg) → positive."""
+    """Right knee medial (higher x for right leg) → positive degrees."""
     hip = (0.4, 0.3, 0.0, 1.0)
-    ankle = (0.45, 0.9, 0.0, 1.0)  # midpoint_x = 0.425
-    knee = (0.5, 0.6, 0.0, 1.0)    # knee at 0.5 > 0.425 → inward → valgus
+    ankle = (0.45, 0.9, 0.0, 1.0)
+    knee = (0.5, 0.6, 0.0, 1.0)    # knee deviated medially off hip-ankle line → valgus
     assert _signed_knee_valgus(hip, knee, ankle, "right") > 0.0
 
 
 def test_signed_knee_valgus_right_varus():
-    """Right knee lateral (lower x for right leg) → negative."""
+    """Right knee lateral (lower x for right leg) → negative degrees."""
     hip = (0.4, 0.3, 0.0, 1.0)
-    ankle = (0.45, 0.9, 0.0, 1.0)  # midpoint_x = 0.425
-    knee = (0.35, 0.6, 0.0, 1.0)   # knee at 0.35 < 0.425 → outward → varus
+    ankle = (0.45, 0.9, 0.0, 1.0)
+    knee = (0.35, 0.6, 0.0, 1.0)   # knee deviated laterally off hip-ankle line → varus
     assert _signed_knee_valgus(hip, knee, ankle, "right") < 0.0
 
 

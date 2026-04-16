@@ -301,7 +301,7 @@ class SessionViewFrame(ctk.CTkFrame):
             if key in self._BEND_FIELDS:
                 val = 180.0 - val
             if key in self._VALGUS_FIELDS:
-                lbl.configure(text=f"{val:+.1f}")   # show sign: +3.2 / -1.4
+                lbl.configure(text=f"{val:+.1f}°")  # show sign: +3.2° / -1.4°
             else:
                 lbl.configure(text=f"{val:.1f}°")
 

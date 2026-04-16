@@ -64,18 +64,34 @@ def _trunk_lean_2d(a: tuple, b: tuple) -> float:
 
 
 def _signed_knee_valgus(hip: tuple, knee: tuple, ankle: tuple, side: str) -> float:
-    """Signed lateral knee deviation from the hip-ankle midpoint x position.
+    """Signed angular deviation of the knee from the hip-ankle line in the frontal plane.
+    0° = hip, knee, and ankle perfectly collinear (straight alignment).
     Positive = valgus (knee inward/medial), negative = varus (knee outward/lateral).
     Designed for front-facing camera.
-    For front camera: patient's LEFT leg appears on the RIGHT of the image (higher x),
-    so left-leg inward movement = lower x → negate raw for consistent sign.
-    Value is multiplied by 100 so typical deviations are in the range ±1 to ±10
-    rather than ±0.01 to ±0.10 (raw normalised units), making the number displayable.
-    Threshold guidance: ±3 = clinically meaningful, ±5 = clearly visible.
+
+    Magnitude: 180° - HKA frontal-plane angle (= 0° when straight, grows with deviation).
+    Sign: determined by which side of the hip-ankle line the knee falls on, using the
+    2D cross product of (hip→ankle) × (hip→knee).
+    Threshold guidance: ±3° = clinically meaningful, ±5° = clearly visible.
     """
-    midpoint_x = (hip[0] + ankle[0]) / 2.0
-    raw = knee[0] - midpoint_x
-    return float((-raw if side == "left" else raw) * 100.0)
+    # Unsigned deviation: 0° when collinear, increases with knee displacement
+    hka = _angle_frontal_plane(hip, knee, ankle)
+    deviation = 180.0 - hka
+
+    # Sign via 2D cross product: (hip→ankle) × (hip→knee)
+    ax, ay = ankle[0] - hip[0], ankle[1] - hip[1]
+    kx, ky = knee[0] - hip[0], knee[1] - hip[1]
+    cross = ax * ky - ay * kx  # > 0: knee is to the left of hip→ankle vector
+
+    # Front camera: patient's LEFT leg is on image RIGHT (higher x).
+    # Left valgus (knee moves medially = lower x) → cross > 0 → positive.
+    # Right valgus (knee moves medially = higher x) → cross < 0 → positive.
+    if side == "left":
+        sign = 1.0 if cross > 0 else (-1.0 if cross < 0 else 0.0)
+    else:
+        sign = -1.0 if cross > 0 else (1.0 if cross < 0 else 0.0)
+
+    return float(sign * deviation)
 
 
 def calculate_angles(keypoints: dict) -> dict:
