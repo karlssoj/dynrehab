@@ -19,9 +19,10 @@ _MESSAGE_FILE = Path(__file__).parent / "message.json"
 _DONE_FILE = Path(__file__).parent / "voice_done.json"
 _POLL_INTERVAL = 0.1
 
-# Speak via a fresh subprocess so pyttsx3 SAPI5 COM state never accumulates
+# Speak via a fresh subprocess so pyttsx3 SAPI5 COM state never accumulates.
+# The sleep gives the Windows audio device time to wake before speech starts.
 _SPEAK_CMD = (
-    "import pyttsx3; e=pyttsx3.init(); e.say(text); e.runAndWait()"
+    "import pyttsx3,time; e=pyttsx3.init(); time.sleep(0.3); e.say(text); e.runAndWait()"
 )
 
 

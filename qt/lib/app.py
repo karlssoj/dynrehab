@@ -16,7 +16,7 @@ from session_runner import SessionRunner
 
 _SECS_PER_WORD = 0.3   # ~200 WPM, used for instructions display only
 _MIN_DISPLAY_SECS = 3
-_VOICE_DONE_TIMEOUT_SECS = 30  # safety fallback if voice module is absent or crashes
+_VOICE_DONE_TIMEOUT_SECS = 120  # safety fallback if voice module is absent or crashes
 
 
 def _display_ms(text: str) -> int:
