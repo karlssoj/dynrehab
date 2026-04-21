@@ -89,7 +89,6 @@ class SessionRunner:
             result["time_remaining"] = max(0.0, remaining)
             if elapsed >= COUNTDOWN_SECS + 0.5:
                 self._enter_exercise()
-                result["state"] = "exercise"
 
         elif self._state == "exercise":
             time_left = self._exercise_secs - elapsed
@@ -106,7 +105,6 @@ class SessionRunner:
             if elapsed >= self._exercise_secs:
                 feedback = self._enter_feedback()
                 result["feedback_lines"] = feedback
-                result["state"] = "feedback"
 
         elif self._state == "feedback":
             pass
