@@ -29,53 +29,23 @@ from pathlib import Path
 _QUEUE_FILE = Path(__file__).parent / "message_queue.jsonl"
 _DONE_FILE = Path(__file__).parent / "voice_done.json"
 _POLL_INTERVAL = 0.1
-_SPEAK_TIMEOUT = 120.0
 
 
-def _start_tts():
-    ps = subprocess.Popen(
-        ["powershell", "-NonInteractive", "-NoProfile", "-Command", "-"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-        bufsize=1,
-    )
-    ps.stdin.write("Add-Type -AssemblyName System.Speech\\n")
-    ps.stdin.write("$s = New-Object System.Speech.Synthesis.SpeechSynthesizer\\n")
-    ps.stdin.write("Write-Host \'__READY__\'\\n")
-    ps.stdin.flush()
-    deadline = time.time() + 15
-    while time.time() < deadline:
-        line = ps.stdout.readline()
-        if "__READY__" in line:
-            return ps
-        if not line:
-            break
-    raise RuntimeError("PowerShell TTS session failed to start")
-
-
-def _speak(ps, text: str) -> None:
+def _speak(text: str) -> None:
     safe = text.replace("\'", "\'\'")
-    ps.stdin.write(f"$s.Speak(\'{safe}\')\\n")
-    ps.stdin.write("Write-Host \'__DONE__\'\\n")
-    ps.stdin.flush()
-    deadline = time.time() + _SPEAK_TIMEOUT
-    while time.time() < deadline:
-        line = ps.stdout.readline()
-        if not line or "__DONE__" in line:
-            return
-    print("[voice] speak timeout")
+    subprocess.run(
+        [
+            "powershell",
+            "-NonInteractive", "-NoProfile", "-WindowStyle", "Hidden",
+            "-Command",
+            f"Add-Type -AssemblyName System.Speech; "
+            f"(New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak(\'{safe}\')",
+        ],
+        timeout=120,
+    )
 
 
 def main():
-    try:
-        ps = _start_tts()
-        print("[voice] TTS ready")
-    except Exception as e:
-        print(f"[voice] TTS init failed: {e}")
-        return
-
     last_pos = 0
     try:
         if _QUEUE_FILE.exists():
@@ -100,7 +70,7 @@ def main():
                             text = data.get("text", "")
                             if text and ts:
                                 print(f"[voice] {data.get(\'type\', \'?\')}: {text}")
-                                _speak(ps, text)
+                                _speak(text)
                                 _DONE_FILE.write_text(
                                     json.dumps({"timestamp": ts}), encoding="utf-8"
                                 )
