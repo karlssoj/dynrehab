@@ -106,6 +106,7 @@ class SessionFrame(ctk.CTkFrame):
         self._feedback_end_scheduled = False
         self._feedback_tts_started = False
         self._joint_value_labels: dict[str, ctk.CTkLabel] = {}
+        self._active = True
         self._build()
         self._start()
 
@@ -181,6 +182,8 @@ class SessionFrame(ctk.CTkFrame):
         self.after(0, lambda r=result, f=annotated, p=pose_frame: self._update_ui(r, f, p))
 
     def _update_ui(self, result: dict, frame: np.ndarray, pose_frame: PoseFrame):
+        if not self._active:
+            return
         state = result["state"]
         display = frame.copy()
         h, w = display.shape[:2]
@@ -249,7 +252,7 @@ class SessionFrame(ctk.CTkFrame):
             self._feedback_lines = list(feedback_lines)
             self._tts.speak_immediate(". ".join(feedback_lines))
             self._feedback_end_scheduled = False
-            self._feedback_tts_started = False
+            self._feedback_tts_started = True
 
         if state == "feedback" and not self._feedback_panel_visible:
             self._show_feedback_panel(result["round_number"])
@@ -338,6 +341,7 @@ class SessionFrame(ctk.CTkFrame):
         self._feedback_panel_visible = False
 
     def _end_session(self):
+        self._active = False
         self._tts.stop()
         self._engine.stop()
         self._engine.unsubscribe(self._on_frame)
