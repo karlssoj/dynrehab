@@ -10,8 +10,8 @@ Contract: read message.json, speak text, write voice_done.json with the
 same timestamp when done.
 """
 import json
-import queue
-import threading
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -19,47 +19,34 @@ _MESSAGE_FILE = Path(__file__).parent / "message.json"
 _DONE_FILE = Path(__file__).parent / "voice_done.json"
 _POLL_INTERVAL = 0.1
 
+# Speak via a fresh subprocess so pyttsx3 SAPI5 COM state never accumulates
+_SPEAK_CMD = (
+    "import pyttsx3; e=pyttsx3.init(); e.say(text); e.runAndWait()"
+)
 
-def _speaker(speech_queue):
-    # pyttsx3 SAPI5 uses COM — must be initialised in the thread that will call it
-    try:
-        import pyttsx3
-        engine = pyttsx3.init()
-    except Exception as e:
-        print(f"[voice] TTS init failed: {e}")
-        return
-    while True:
-        ts, text = speech_queue.get()
-        try:
-            engine.say(text)
-            engine.runAndWait()
-            _DONE_FILE.write_text(json.dumps({"timestamp": ts}), encoding="utf-8")
-        except Exception as e:
-            print(f"[voice] speak error: {e}")
+
+def _speak(text: str) -> None:
+    subprocess.run(
+        [sys.executable, "-c", f"text={repr(text)}; {_SPEAK_CMD}"],
+        timeout=120,
+    )
 
 
 def main():
     try:
-        import pyttsx3  # noqa: F401 — verify importable before spawning thread
+        import pyttsx3  # noqa: F401 — verify importable before use
     except ImportError:
         print("[voice] pyttsx3 not installed. Run: pip install pyttsx3")
         return
 
-    # Skip any message already spoken in a previous run so we don't replay stale audio
+    # Seed from message.json so we never replay the last message from a previous run
     last_timestamp = None
     try:
-        for path in (_DONE_FILE, _MESSAGE_FILE):
-            if path.exists():
-                data = json.loads(path.read_text(encoding="utf-8"))
-                ts = data.get("timestamp")
-                if ts:
-                    last_timestamp = ts
-                    break
+        if _MESSAGE_FILE.exists():
+            data = json.loads(_MESSAGE_FILE.read_text(encoding="utf-8"))
+            last_timestamp = data.get("timestamp")
     except Exception:
         pass
-
-    speech_queue = queue.Queue()
-    threading.Thread(target=_speaker, args=(speech_queue,), daemon=True).start()
 
     print("[voice] ready — watching message.json")
 
@@ -73,7 +60,10 @@ def main():
                     text = data.get("text", "")
                     if text:
                         print(f"[voice] {data.get('type', '?')}: {text}")
-                        speech_queue.put((ts, text))
+                        _speak(text)
+                        _DONE_FILE.write_text(
+                            json.dumps({"timestamp": ts}), encoding="utf-8"
+                        )
         except Exception as e:
             print(f"[voice] error: {e}")
         time.sleep(_POLL_INTERVAL)
