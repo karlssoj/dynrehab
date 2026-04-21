@@ -169,6 +169,9 @@ class SessionFrame(ctk.CTkFrame):
     def _start(self):
         self._relevant_joints = self._runner.get_relevant_joints()
         self._build_joint_labels()
+        instructions = self._runner.get_instructions()
+        if instructions:
+            self._write_message(". ".join(instructions), "instructions")
         self._runner.start_countdown()
         self._engine.subscribe(self._on_frame)
         self._engine.start()
@@ -199,11 +202,13 @@ class SessionFrame(ctk.CTkFrame):
                     cv2.putText(display, count_str,
                                 ((w - ts[0]) // 2, (h + ts[1]) // 2),
                                 cv2.FONT_HERSHEY_SIMPLEX, 5.0, (0, 255, 255), 8)
+                    self._write_message(count_str, "countdown")
                 else:
                     ts = cv2.getTextSize("GO!", cv2.FONT_HERSHEY_SIMPLEX, 4.0, 8)[0]
                     cv2.putText(display, "GO!",
                                 ((w - ts[0]) // 2, (h + ts[1]) // 2),
                                 cv2.FONT_HERSHEY_SIMPLEX, 4.0, (0, 255, 0), 8)
+                    self._write_message("Go!", "countdown")
             else:
                 remaining = result.get("time_remaining", 0.0)
                 count_num = max(0, math.ceil(remaining))
@@ -228,7 +233,7 @@ class SessionFrame(ctk.CTkFrame):
         feedback_lines = result.get("feedback_lines")
         if feedback_lines is not None:
             self._feedback_lines = list(feedback_lines)
-            self._write_feedback(feedback_lines, result["round_number"])
+            self._write_message(". ".join(feedback_lines), "feedback")
             self._feedback_end_scheduled = False
 
         if state == "feedback" and not self._feedback_panel_visible:
@@ -262,18 +267,18 @@ class SessionFrame(ctk.CTkFrame):
         if self._active:
             self._runner.end_feedback()
 
-    def _write_feedback(self, lines: list[str], round_number: int):
+    def _write_message(self, text: str, msg_type: str):
         payload = {
             "timestamp": time.time(),
-            "round": round_number,
-            "lines": lines,
+            "type": msg_type,
+            "text": text,
         }
         try:
-            path = self._feedback_dir / "feedback.json"
+            path = self._feedback_dir / "message.json"
             path.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
                             encoding="utf-8")
         except Exception as e:
-            print(f"[app] failed to write feedback.json: {e}")
+            print(f"[app] failed to write message.json: {e}")
 
     def _update_camera(self, bgr_frame: np.ndarray):
         rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
