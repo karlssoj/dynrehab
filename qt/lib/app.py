@@ -14,8 +14,9 @@ from core.pose_engine import PoseEngine
 from core.data_contract import PoseFrame
 from session_runner import SessionRunner
 
-_SECS_PER_WORD = 0.3   # ~200 WPM, matches typical TTS reading speed
+_SECS_PER_WORD = 0.3   # ~200 WPM, used for instructions display only
 _MIN_DISPLAY_SECS = 3
+_VOICE_DONE_TIMEOUT_SECS = 30  # safety fallback if voice module is absent or crashes
 
 
 def _display_ms(text: str) -> int:
@@ -107,6 +108,7 @@ class SessionFrame(ctk.CTkFrame):
         self._exercise_secs: int = config.get("session_duration_secs", 60)
         self._feedback_panel_visible = False
         self._feedback_end_scheduled = False
+        self._last_message_ts: float = 0.0
         self._joint_value_labels: dict[str, ctk.CTkLabel] = {}
         self._active = True
         self._build()
@@ -243,7 +245,8 @@ class SessionFrame(ctk.CTkFrame):
 
         if state == "feedback" and not self._feedback_end_scheduled:
             self._feedback_end_scheduled = True
-            self.after(_display_ms(" ".join(self._feedback_lines)), self._dismiss_feedback)
+            deadline = time.time() + _VOICE_DONE_TIMEOUT_SECS
+            self.after(200, lambda: self._check_voice_done(self._last_message_ts, deadline))
 
         if not self._feedback_panel_visible:
             self._update_camera(display)
@@ -263,20 +266,31 @@ class SessionFrame(ctk.CTkFrame):
         self.rep_label.configure(text=rep_text)
         self.feedback_label.configure(text=fb_text)
 
-    def _dismiss_feedback(self):
-        if self._active:
+    def _check_voice_done(self, ts: float, deadline: float):
+        if not self._active:
+            return
+        done = False
+        try:
+            done_file = self._feedback_dir / "voice_done.json"
+            if done_file.exists():
+                data = json.loads(done_file.read_text(encoding="utf-8"))
+                if data.get("timestamp", 0) >= ts:
+                    done = True
+        except Exception:
+            pass
+        if done or time.time() >= deadline:
             self._runner.end_feedback()
+        else:
+            self.after(200, lambda: self._check_voice_done(ts, deadline))
 
     def _write_message(self, text: str, msg_type: str):
-        payload = {
-            "timestamp": time.time(),
-            "type": msg_type,
-            "text": text,
-        }
+        ts = time.time()
+        payload = {"timestamp": ts, "type": msg_type, "text": text}
         try:
             path = self._feedback_dir / "message.json"
             path.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
                             encoding="utf-8")
+            self._last_message_ts = ts
         except Exception as e:
             print(f"[app] failed to write message.json: {e}")
 

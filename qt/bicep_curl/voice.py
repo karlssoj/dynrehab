@@ -1,17 +1,20 @@
 """
 voice.py — local TTS module for standalone exercise apps.
 
-Run alongside run.py in a separate terminal:
-    python voice.py
+Launched automatically by run.py. Watches message.json and speaks each new
+message via pyttsx3. Writes voice_done.json when speech completes so the
+exercise app knows when to advance.
 
-Watches message.json and speaks each new message via pyttsx3.
 On QTRobot, replace this file with a module that uses the robot's TTS API.
+The contract: read message.json, speak text, write voice_done.json with the
+same timestamp when done.
 """
 import json
 import time
 from pathlib import Path
 
 _MESSAGE_FILE = Path(__file__).parent / "message.json"
+_DONE_FILE = Path(__file__).parent / "voice_done.json"
 _POLL_INTERVAL = 0.1
 
 
@@ -23,6 +26,10 @@ def main():
         return
 
     engine = pyttsx3.init()
+    # Warm up SAPI5/espeak so the first real message has no startup delay
+    engine.say(" ")
+    engine.runAndWait()
+
     last_timestamp = None
     print("[voice] ready — watching message.json")
 
@@ -38,6 +45,9 @@ def main():
                         print(f"[voice] {data.get('type', '?')}: {text}")
                         engine.say(text)
                         engine.runAndWait()
+                        _DONE_FILE.write_text(
+                            json.dumps({"timestamp": ts}), encoding="utf-8"
+                        )
         except Exception as e:
             print(f"[voice] error: {e}")
         time.sleep(_POLL_INTERVAL)
