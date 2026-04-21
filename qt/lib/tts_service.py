@@ -1,3 +1,4 @@
+import pyttsx3
 import queue
 import threading
 import time
@@ -10,6 +11,7 @@ class TTSService:
         self._lock = threading.Lock()
         self._queue: queue.Queue = queue.Queue()
         self._speaking = False
+        self._engine = None
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
 
@@ -35,17 +37,22 @@ class TTSService:
                 self._queue.get_nowait()
             except queue.Empty:
                 break
+        engine = self._engine
+        if engine is not None:
+            try:
+                engine.stop()
+            except Exception:
+                pass
 
     def _worker(self):
-        import pyttsx3
-        engine = pyttsx3.init()
+        self._engine = pyttsx3.init()
         while True:
             message = self._queue.get()
             self._speaking = True
             try:
-                engine.say(message)
-                engine.runAndWait()
-            except Exception:
-                pass
+                self._engine.say(message)
+                self._engine.runAndWait()
+            except Exception as e:
+                print(f"[tts] engine error: {e}")
             finally:
                 self._speaking = False
