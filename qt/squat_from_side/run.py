@@ -1,3 +1,4 @@
+import subprocess
 import sys
 from pathlib import Path
 
@@ -9,5 +10,9 @@ import analysis_module
 from app import StandaloneApp
 
 if __name__ == "__main__":
-    StandaloneApp(exercise_config.CONFIG, analysis_module,
-                  feedback_dir=Path(__file__).parent).mainloop()
+    voice = subprocess.Popen([sys.executable, str(Path(__file__).parent / "voice.py")])
+    try:
+        StandaloneApp(exercise_config.CONFIG, analysis_module,
+                      feedback_dir=Path(__file__).parent).mainloop()
+    finally:
+        voice.terminate()
