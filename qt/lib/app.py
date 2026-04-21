@@ -14,7 +14,7 @@ from core.pose_engine import PoseEngine
 from core.data_contract import PoseFrame
 from session_runner import SessionRunner
 
-_SECS_PER_WORD = 2
+_SECS_PER_WORD = 0.5
 _MIN_DISPLAY_SECS = 5
 
 
