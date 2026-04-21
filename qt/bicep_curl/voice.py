@@ -1,70 +1,103 @@
 """
 voice.py — TTS module for standalone exercise apps.
 
-Launched automatically by run.py. Watches message.json and speaks each new
-message via pyttsx3. Writes voice_done.json when each speech completes so
-the exercise app knows when to advance.
+Launched automatically by run.py. Reads message_queue.jsonl (one JSON
+entry per line) and speaks each message in order via Windows PowerShell
+System.Speech. Writes voice_done.json after each speech so the exercise
+app knows when to advance.
 
 On QTRobot, replace this file with a module that uses the robot's TTS API.
-Contract: read message.json, speak text, write voice_done.json with the
-same timestamp when done.
+Contract: read message_queue.jsonl, speak each entry's "text" in order,
+write voice_done.json with the entry's "timestamp" when done.
 """
 import json
 import subprocess
-import sys
 import time
 from pathlib import Path
 
-_MESSAGE_FILE = Path(__file__).parent / "message.json"
+_QUEUE_FILE = Path(__file__).parent / "message_queue.jsonl"
 _DONE_FILE = Path(__file__).parent / "voice_done.json"
 _POLL_INTERVAL = 0.1
-
-# Speak via a fresh subprocess so pyttsx3 SAPI5 COM state never accumulates.
-# The sleep gives the Windows audio device time to wake before speech starts.
-_SPEAK_CMD = (
-    "import pyttsx3,time; e=pyttsx3.init(); time.sleep(0.3); e.say(text); e.runAndWait()"
-)
+_SPEAK_TIMEOUT = 120.0
 
 
-def _speak(text: str) -> None:
-    subprocess.run(
-        [sys.executable, "-c", f"text={repr(text)}; {_SPEAK_CMD}"],
-        timeout=120,
+def _start_tts():
+    """Start a persistent PowerShell session with System.Speech loaded."""
+    ps = subprocess.Popen(
+        ["powershell", "-NonInteractive", "-NoProfile", "-Command", "-"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        bufsize=1,
     )
+    ps.stdin.write("Add-Type -AssemblyName System.Speech\n")
+    ps.stdin.write("$s = New-Object System.Speech.Synthesis.SpeechSynthesizer\n")
+    ps.stdin.write("Write-Host '__READY__'\n")
+    ps.stdin.flush()
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        line = ps.stdout.readline()
+        if "__READY__" in line:
+            return ps
+        if not line:
+            break
+    raise RuntimeError("PowerShell TTS session failed to start")
+
+
+def _speak(ps, text: str) -> None:
+    safe = text.replace("'", "''")
+    ps.stdin.write(f"$s.Speak('{safe}')\n")
+    ps.stdin.write("Write-Host '__DONE__'\n")
+    ps.stdin.flush()
+    deadline = time.time() + _SPEAK_TIMEOUT
+    while time.time() < deadline:
+        line = ps.stdout.readline()
+        if not line or "__DONE__" in line:
+            return
+    print("[voice] speak timeout")
 
 
 def main():
     try:
-        import pyttsx3  # noqa: F401 — verify importable before use
-    except ImportError:
-        print("[voice] pyttsx3 not installed. Run: pip install pyttsx3")
+        ps = _start_tts()
+        print("[voice] TTS ready")
+    except Exception as e:
+        print(f"[voice] TTS init failed: {e}")
         return
 
-    # Seed from message.json so we never replay the last message from a previous run
-    last_timestamp = None
+    # Seek past existing queue so previous session's messages aren't replayed
+    last_pos = 0
     try:
-        if _MESSAGE_FILE.exists():
-            data = json.loads(_MESSAGE_FILE.read_text(encoding="utf-8"))
-            last_timestamp = data.get("timestamp")
+        if _QUEUE_FILE.exists():
+            last_pos = _QUEUE_FILE.stat().st_size
     except Exception:
         pass
 
-    print("[voice] ready — watching message.json")
+    print("[voice] ready — watching message_queue.jsonl")
 
     while True:
         try:
-            if _MESSAGE_FILE.exists():
-                data = json.loads(_MESSAGE_FILE.read_text(encoding="utf-8"))
-                ts = data.get("timestamp")
-                if ts and ts != last_timestamp:
-                    last_timestamp = ts
-                    text = data.get("text", "")
-                    if text:
-                        print(f"[voice] {data.get('type', '?')}: {text}")
-                        _speak(text)
-                        _DONE_FILE.write_text(
-                            json.dumps({"timestamp": ts}), encoding="utf-8"
-                        )
+            if _QUEUE_FILE.exists():
+                with open(_QUEUE_FILE, encoding="utf-8") as f:
+                    f.seek(last_pos)
+                    for raw in f:
+                        try:
+                            entry = raw.strip()
+                            if not entry:
+                                continue
+                            data = json.loads(entry)
+                            ts = data.get("timestamp")
+                            text = data.get("text", "")
+                            if text and ts:
+                                print(f"[voice] {data.get('type', '?')}: {text}")
+                                _speak(ps, text)
+                                _DONE_FILE.write_text(
+                                    json.dumps({"timestamp": ts}), encoding="utf-8"
+                                )
+                        except Exception as e:
+                            print(f"[voice] entry error: {e}")
+                    last_pos = f.tell()
         except Exception as e:
             print(f"[voice] error: {e}")
         time.sleep(_POLL_INTERVAL)

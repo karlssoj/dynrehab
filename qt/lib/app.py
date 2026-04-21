@@ -56,11 +56,10 @@ class StandaloneApp(ctk.CTk):
         ts = time.time()
         payload = {"timestamp": ts, "type": msg_type, "text": text}
         try:
-            (self._feedback_dir / "message.json").write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
+            with open(self._feedback_dir / "message_queue.jsonl", "a", encoding="utf-8") as f:
+                f.write(json.dumps(payload, ensure_ascii=False) + "\n")
         except Exception as e:
-            print(f"[app] failed to write message.json: {e}")
+            print(f"[app] failed to write message_queue.jsonl: {e}")
         return ts
 
     def _check_voice_done(self, ts: float, deadline: float, on_done: Callable):
