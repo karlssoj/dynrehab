@@ -21,25 +21,16 @@ _POLL_INTERVAL = 0.1
 
 
 def _speak(text: str) -> None:
-    # XML-escape text for SSML; leading <break> lets the audio device wake
-    # before the first word so nothing gets clipped.
-    safe = (
-        text
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-        .replace("'", "&apos;")
-    )
-    ssml = f'<speak><break time="300ms"/>{safe}</speak>'
+    safe = text.replace("'", "''")
     result = subprocess.run(
         [
             "powershell",
             "-NonInteractive", "-NoProfile", "-WindowStyle", "Hidden",
             "-Command",
-            "Add-Type -AssemblyName System.Speech; "
-            "(New-Object System.Speech.Synthesis.SpeechSynthesizer)"
-            f".SpeakSsml('{ssml}')",
+            f"Add-Type -AssemblyName System.Speech; "
+            f"$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+            f"Start-Sleep -Milliseconds 300; "
+            f"$s.Speak('{safe}')",
         ],
         timeout=120,
         capture_output=True,
