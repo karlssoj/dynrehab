@@ -108,9 +108,18 @@ class ExerciseService:
             (mod_id, exercise_id, next_ver, code, status),
         )
         self.conn.commit()
-        return dict(self.conn.execute(
+        result = dict(self.conn.execute(
             "SELECT * FROM analysis_modules WHERE id = ?", (mod_id,)
         ).fetchone())
+
+        if status == "validated":
+            try:
+                from physio_app.services.standalone_generator import StandaloneGenerator
+                StandaloneGenerator.generate(exercise_id, self.conn)
+            except Exception as e:
+                print(f"[standalone] generation failed: {e}")
+
+        return result
 
     def list_modules(self, exercise_id: str) -> list[dict]:
         rows = self.conn.execute(
