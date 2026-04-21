@@ -23,6 +23,7 @@ class StandaloneApp(ctk.CTk):
         self.geometry("1100x700")
         ctk.set_appearance_mode("dark")
         self._current_frame = None
+        self.protocol("WM_DELETE_WINDOW", self.quit)
         self._show_instructions()
 
     def _clear(self):
@@ -40,14 +41,7 @@ class StandaloneApp(ctk.CTk):
     def _show_session(self):
         self._clear()
         self._current_frame = SessionFrame(
-            self, self._config, self._module, on_done=self._show_summary
-        )
-        self._current_frame.pack(fill="both", expand=True)
-
-    def _show_summary(self, summary: dict):
-        self._clear()
-        self._current_frame = SummaryFrame(
-            self, summary, self._config.get("name", "Exercise"), on_done=self.quit
+            self, self._config, self._module, on_done=lambda _: self.quit()
         )
         self._current_frame.pack(fill="both", expand=True)
 
