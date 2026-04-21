@@ -32,17 +32,30 @@ _POLL_INTERVAL = 0.1
 
 
 def _speak(text: str) -> None:
-    safe = text.replace("\'", "\'\'")
-    subprocess.run(
+    safe = (
+        text
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace(\'"\', "&quot;")
+        .replace("\'", "&apos;")
+    )
+    ssml = f\'<speak><break time="300ms"/>{safe}</speak>\'
+    result = subprocess.run(
         [
             "powershell",
             "-NonInteractive", "-NoProfile", "-WindowStyle", "Hidden",
             "-Command",
-            f"Add-Type -AssemblyName System.Speech; "
-            f"(New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak(\'{safe}\')",
+            "Add-Type -AssemblyName System.Speech; "
+            "(New-Object System.Speech.Synthesis.SpeechSynthesizer)"
+            f".SpeakSsml(\'{ssml}\')",
         ],
         timeout=120,
+        capture_output=True,
+        text=True,
     )
+    if result.returncode != 0:
+        print(f"[voice] speak failed (rc={result.returncode}): {result.stderr[:300]}")
 
 
 def main():
