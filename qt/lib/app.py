@@ -14,7 +14,13 @@ from core.pose_engine import PoseEngine
 from core.data_contract import PoseFrame
 from session_runner import SessionRunner
 
-_FEEDBACK_DISPLAY_SECS = 5
+_FEEDBACK_MIN_SECS = 5
+_FEEDBACK_WORDS_PER_SEC = 2.5  # comfortable reading pace
+
+
+def _feedback_display_ms(lines: list[str]) -> int:
+    words = sum(len(ln.split()) for ln in lines)
+    return max(_FEEDBACK_MIN_SECS, round(words / _FEEDBACK_WORDS_PER_SEC)) * 1000
 
 
 class StandaloneApp(ctk.CTk):
@@ -232,7 +238,7 @@ class SessionFrame(ctk.CTkFrame):
 
         if state == "feedback" and not self._feedback_end_scheduled:
             self._feedback_end_scheduled = True
-            self.after(_FEEDBACK_DISPLAY_SECS * 1000, self._dismiss_feedback)
+            self.after(_feedback_display_ms(self._feedback_lines), self._dismiss_feedback)
 
         if not self._feedback_panel_visible:
             self._update_camera(display)
