@@ -14,8 +14,8 @@ from core.pose_engine import PoseEngine
 from core.data_contract import PoseFrame
 from session_runner import SessionRunner
 
-_SECS_PER_WORD = 0.5
-_MIN_DISPLAY_SECS = 5
+_SECS_PER_WORD = 0.3   # ~200 WPM, matches typical TTS reading speed
+_MIN_DISPLAY_SECS = 3
 
 
 def _display_ms(text: str) -> int:
