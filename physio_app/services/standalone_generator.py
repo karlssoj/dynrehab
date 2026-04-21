@@ -8,6 +8,56 @@ _REPO_ROOT = Path(__file__).parent.parent.parent
 _QT_DIR = _REPO_ROOT / "qt"
 _CORE_SRC = _REPO_ROOT / "core"
 
+_VOICE_PY = '''\
+"""
+voice.py — local TTS module for standalone exercise apps.
+
+Run alongside run.py in a separate terminal:
+    python voice.py
+
+Watches message.json and speaks each new message via pyttsx3.
+On QTRobot, replace this file with a module that uses the robot\'s TTS API.
+"""
+import json
+import time
+from pathlib import Path
+
+_MESSAGE_FILE = Path(__file__).parent / "message.json"
+_POLL_INTERVAL = 0.1
+
+
+def main():
+    try:
+        import pyttsx3
+    except ImportError:
+        print("[voice] pyttsx3 not installed. Run: pip install pyttsx3")
+        return
+
+    engine = pyttsx3.init()
+    last_timestamp = None
+    print("[voice] ready — watching message.json")
+
+    while True:
+        try:
+            if _MESSAGE_FILE.exists():
+                data = json.loads(_MESSAGE_FILE.read_text(encoding="utf-8"))
+                ts = data.get("timestamp")
+                if ts != last_timestamp:
+                    last_timestamp = ts
+                    text = data.get("text", "")
+                    if text:
+                        print(f"[voice] {data.get(\'type\', \'?\')}: {text}")
+                        engine.say(text)
+                        engine.runAndWait()
+        except Exception as e:
+            print(f"[voice] error: {e}")
+        time.sleep(_POLL_INTERVAL)
+
+
+if __name__ == "__main__":
+    main()
+'''
+
 _RUN_PY = '''\
 import sys
 from pathlib import Path
@@ -86,6 +136,7 @@ class StandaloneGenerator:
             module["code"], encoding="utf-8"
         )
         (exercise_dir / "run.py").write_text(_RUN_PY, encoding="utf-8")
+        (exercise_dir / "voice.py").write_text(_VOICE_PY, encoding="utf-8")
 
         _sync_lib_core()
         print(f"[standalone] generated qt/{slug}/")
