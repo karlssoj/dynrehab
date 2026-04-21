@@ -26,10 +26,6 @@ def main():
         return
 
     engine = pyttsx3.init()
-    # Warm up SAPI5/espeak so the first real message has no startup delay
-    engine.say(" ")
-    engine.runAndWait()
-
     last_timestamp = None
     print("[voice] ready — watching message.json")
 
