@@ -2,6 +2,8 @@ import re
 import shutil
 from pathlib import Path
 
+from physio_app.services.exercise_service import ExerciseService
+
 _REPO_ROOT = Path(__file__).parent.parent.parent
 _QT_DIR = _REPO_ROOT / "qt"
 _CORE_SRC = _REPO_ROOT / "core"
@@ -50,6 +52,8 @@ def _sync_lib_core():
         src = _CORE_SRC / fname
         if src.exists():
             shutil.copy2(src, core_dst / fname)
+        else:
+            print(f"[standalone] warning: core source {fname} not found at {src}")
     init = core_dst / "__init__.py"
     if not init.exists():
         init.write_text("", encoding="utf-8")
@@ -58,7 +62,6 @@ def _sync_lib_core():
 class StandaloneGenerator:
     @staticmethod
     def generate(exercise_id: str, conn) -> None:
-        from physio_app.services.exercise_service import ExerciseService
         svc = ExerciseService(conn)
         ex = svc.get(exercise_id)
         if ex is None:
@@ -71,6 +74,8 @@ class StandaloneGenerator:
 
         slug = _slugify(ex.name)
         exercise_dir = _QT_DIR / slug
+        if exercise_dir.exists():
+            print(f"[standalone] warning: qt/{slug}/ already exists, overwriting")
         exercise_dir.mkdir(parents=True, exist_ok=True)
 
         (exercise_dir / "exercise_config.py").write_text(
