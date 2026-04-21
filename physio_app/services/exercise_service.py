@@ -112,12 +112,16 @@ class ExerciseService:
             "SELECT * FROM analysis_modules WHERE id = ?", (mod_id,)
         ).fetchone())
 
+        # Commit above makes the new module active; generate() will see it correctly.
         if status == "validated":
             try:
+                # Local import avoids circular dependency: standalone_generator imports ExerciseService.
                 from physio_app.services.standalone_generator import StandaloneGenerator
                 StandaloneGenerator.generate(exercise_id, self.conn)
             except Exception as e:
+                import traceback
                 print(f"[standalone] generation failed: {e}")
+                traceback.print_exc()
 
         return result
 
