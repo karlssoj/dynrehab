@@ -1,5 +1,7 @@
+import json
 import math
 import sys
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -11,14 +13,17 @@ from PIL import Image
 from core.pose_engine import PoseEngine
 from core.data_contract import PoseFrame
 from session_runner import SessionRunner
-from tts_service import TTSService
+
+_FEEDBACK_DISPLAY_SECS = 5
 
 
 class StandaloneApp(ctk.CTk):
-    def __init__(self, config: dict, analysis_module):
+    def __init__(self, config: dict, analysis_module,
+                 feedback_dir: Path = None):
         super().__init__()
         self._config = config
         self._module = analysis_module
+        self._feedback_dir = feedback_dir or Path(sys.argv[0]).resolve().parent
         self.title(config.get("name", "Exercise"))
         self.geometry("1100x700")
         ctk.set_appearance_mode("dark")
@@ -41,7 +46,9 @@ class StandaloneApp(ctk.CTk):
     def _show_session(self):
         self._clear()
         self._current_frame = SessionFrame(
-            self, self._config, self._module, on_done=lambda _: self.quit()
+            self, self._config, self._module,
+            feedback_dir=self._feedback_dir,
+            on_done=lambda _: self.quit(),
         )
         self._current_frame.pack(fill="both", expand=True)
 
@@ -82,20 +89,18 @@ class SessionFrame(ctk.CTkFrame):
     _VALGUS_FIELDS = {"left_knee_valgus", "right_knee_valgus"}
 
     def __init__(self, parent, config: dict, analysis_module,
+                 feedback_dir: Path,
                  on_done: Callable[[dict], None], **kwargs):
         super().__init__(parent, **kwargs)
         self._config = config
         self._on_done = on_done
+        self._feedback_dir = feedback_dir
         self._engine = PoseEngine()
         self._runner = SessionRunner(config, analysis_module)
-        self._tts = TTSService(cooldown_seconds=0.0)
         self._feedback_lines: list[str] = []
-        self._instructions_spoken = False
-        self._countdown_triggered = False
         self._exercise_secs: int = config.get("session_duration_secs", 60)
         self._feedback_panel_visible = False
         self._feedback_end_scheduled = False
-        self._feedback_tts_started = False
         self._joint_value_labels: dict[str, ctk.CTkLabel] = {}
         self._active = True
         self._build()
@@ -156,15 +161,9 @@ class SessionFrame(ctk.CTkFrame):
         self.feedback_label.pack(padx=10)
 
     def _start(self):
-        instructions = self._runner.get_instructions()
-        if instructions:
-            self._tts.speak_immediate(". ".join(instructions))
-            self._instructions_spoken = True
-        else:
-            self._runner.start_countdown()
-            self._countdown_triggered = True
         self._relevant_joints = self._runner.get_relevant_joints()
         self._build_joint_labels()
+        self._runner.start_countdown()
         self._engine.subscribe(self._on_frame)
         self._engine.start()
 
@@ -179,21 +178,7 @@ class SessionFrame(ctk.CTkFrame):
         display = frame.copy()
         h, w = display.shape[:2]
 
-        if state == "instructions":
-            overlay = display.copy()
-            cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
-            cv2.addWeighted(overlay, 0.6, display, 0.4, 0, display)
-            text = "Listening to instructions..."
-            text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)[0]
-            tx = (w - text_size[0]) // 2
-            cv2.putText(display, text, (tx, h // 2),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 220, 255), 2)
-            if (self._instructions_spoken and not self._countdown_triggered
-                    and not self._tts.is_speaking()):
-                self._countdown_triggered = True
-                self._runner.start_countdown()
-
-        elif state == "countdown":
+        if state == "countdown":
             overlay = display.copy()
             cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
             cv2.addWeighted(overlay, 0.5, display, 0.5, 0, display)
@@ -234,16 +219,11 @@ class SessionFrame(ctk.CTkFrame):
             bar_width = int(min(1.0, elapsed / self._exercise_secs) * w)
             cv2.rectangle(display, (0, h - 8), (bar_width, h), (0, 200, 255), -1)
 
-        countdown_speak = result.get("countdown_speak")
-        if countdown_speak is not None and state == "countdown":
-            self._tts.speak(str(countdown_speak) if countdown_speak > 0 else "Go!")
-
         feedback_lines = result.get("feedback_lines")
         if feedback_lines is not None:
             self._feedback_lines = list(feedback_lines)
-            self._tts.speak_immediate(". ".join(feedback_lines))
+            self._write_feedback(feedback_lines, result["round_number"])
             self._feedback_end_scheduled = False
-            self._feedback_tts_started = True
 
         if state == "feedback" and not self._feedback_panel_visible:
             self._show_feedback_panel(result["round_number"])
@@ -251,11 +231,8 @@ class SessionFrame(ctk.CTkFrame):
             self._hide_feedback_panel()
 
         if state == "feedback" and not self._feedback_end_scheduled:
-            if self._tts.is_speaking():
-                self._feedback_tts_started = True
-            if self._feedback_tts_started and not self._tts.is_speaking():
-                self._feedback_end_scheduled = True
-                self._runner.end_feedback()
+            self._feedback_end_scheduled = True
+            self.after(_FEEDBACK_DISPLAY_SECS * 1000, self._dismiss_feedback)
 
         if not self._feedback_panel_visible:
             self._update_camera(display)
@@ -264,9 +241,8 @@ class SessionFrame(ctk.CTkFrame):
             self._update_joint_labels(pose_frame)
 
         label_map = {
-            "instructions": ("—", "Instructions..."),
             "countdown": (str(result["round_number"] + 1), "Get ready!"),
-            "exercise": (str(result["round_rep_count"]), "EXERCISE"),
+            "exercise": (str(result["round_rep_count"]), ""),
             "feedback": (
                 str(result["round_rep_count"]),
                 self._feedback_lines[0] if self._feedback_lines else "",
@@ -275,6 +251,23 @@ class SessionFrame(ctk.CTkFrame):
         rep_text, fb_text = label_map.get(state, ("—", ""))
         self.rep_label.configure(text=rep_text)
         self.feedback_label.configure(text=fb_text)
+
+    def _dismiss_feedback(self):
+        if self._active:
+            self._runner.end_feedback()
+
+    def _write_feedback(self, lines: list[str], round_number: int):
+        payload = {
+            "timestamp": time.time(),
+            "round": round_number,
+            "lines": lines,
+        }
+        try:
+            path = self._feedback_dir / "feedback.json"
+            path.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
+                            encoding="utf-8")
+        except Exception as e:
+            print(f"[app] failed to write feedback.json: {e}")
 
     def _update_camera(self, bgr_frame: np.ndarray):
         rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
@@ -333,13 +326,14 @@ class SessionFrame(ctk.CTkFrame):
 
     def _end_session(self):
         self._active = False
-        self._tts.stop()
         self._engine.stop()
         self._engine.unsubscribe(self._on_frame)
         self._on_done(self._runner.get_summary())
 
 
 class SummaryFrame(ctk.CTkFrame):
+    """Unused in standalone mode — kept for potential future use."""
+
     def __init__(self, parent, summary: dict, exercise_name: str,
                  on_done: Callable, **kwargs):
         super().__init__(parent, **kwargs)
@@ -347,41 +341,4 @@ class SummaryFrame(ctk.CTkFrame):
                      font=ctk.CTkFont(size=28, weight="bold")).pack(pady=(30, 6))
         ctk.CTkLabel(self, text=exercise_name,
                      text_color="gray", font=ctk.CTkFont(size=16)).pack()
-
-        stats = ctk.CTkFrame(self, fg_color="transparent")
-        stats.pack(pady=20)
-        self._stat_box(stats, "Reps", str(summary["rep_count"])).pack(side="left", padx=20)
-        self._stat_box(stats, "Quality", f"{summary['quality_pct']}%").pack(side="left", padx=20)
-        mins = int(summary.get("duration_seconds", 0) // 60)
-        secs = int(summary.get("duration_seconds", 0) % 60)
-        self._stat_box(stats, "Duration", f"{mins}:{secs:02d}").pack(side="left", padx=20)
-
-        ctk.CTkLabel(self, text="Feedback Log",
-                     font=ctk.CTkFont(size=16, weight="bold")).pack(anchor="w", padx=40, pady=(10, 4))
-        log_frame = ctk.CTkScrollableFrame(self, height=250)
-        log_frame.pack(fill="x", padx=40, pady=(0, 20))
-        feedback_log = summary.get("feedback_log", [])
-        if not feedback_log:
-            ctk.CTkLabel(log_frame, text="No feedback recorded.",
-                         text_color="gray").pack(pady=20)
-        else:
-            for entry in feedback_log:
-                ts = entry.get("timestamp", 0.0)
-                msg = entry.get("message", "")
-                row = ctk.CTkFrame(log_frame, fg_color="transparent")
-                row.pack(fill="x", pady=2)
-                ctk.CTkLabel(row, text=f"{ts:.1f}s",
-                             text_color="gray", width=60).pack(side="left")
-                ctk.CTkLabel(row, text=msg, anchor="w").pack(
-                    side="left", fill="x", expand=True)
-
-        ctk.CTkButton(self, text="Done", height=44, width=160, command=on_done).pack(pady=10)
-
-    @staticmethod
-    def _stat_box(parent, label: str, value: str) -> ctk.CTkFrame:
-        frame = ctk.CTkFrame(parent, width=140, height=100)
-        ctk.CTkLabel(frame, text=value,
-                     font=ctk.CTkFont(size=36, weight="bold")).pack(pady=(14, 2))
-        ctk.CTkLabel(frame, text=label,
-                     text_color="gray", font=ctk.CTkFont(size=13)).pack()
-        return frame
+        ctk.CTkButton(self, text="Done", height=44, width=160, command=on_done).pack(pady=30)

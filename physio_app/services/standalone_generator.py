@@ -20,7 +20,8 @@ import analysis_module
 from app import StandaloneApp
 
 if __name__ == "__main__":
-    StandaloneApp(exercise_config.CONFIG, analysis_module).mainloop()
+    StandaloneApp(exercise_config.CONFIG, analysis_module,
+                  feedback_dir=Path(__file__).parent).mainloop()
 '''
 
 
