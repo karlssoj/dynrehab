@@ -45,10 +45,38 @@ class StandaloneApp(ctk.CTk):
 
     def _show_instructions(self):
         self._clear()
-        self._current_frame = InstructionsFrame(
-            self, self._config, on_start=self._show_session
-        )
+        instructions = self._config.get("client_instructions", "")
+        ts = self._write_message(instructions, "instructions") if instructions else None
+        self._current_frame = InstructionsFrame(self, self._config)
         self._current_frame.pack(fill="both", expand=True)
+        deadline = time.time() + _VOICE_DONE_TIMEOUT_SECS
+        self.after(200, lambda: self._check_voice_done(ts, deadline, self._show_session))
+
+    def _write_message(self, text: str, msg_type: str) -> float:
+        ts = time.time()
+        payload = {"timestamp": ts, "type": msg_type, "text": text}
+        try:
+            (self._feedback_dir / "message.json").write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except Exception as e:
+            print(f"[app] failed to write message.json: {e}")
+        return ts
+
+    def _check_voice_done(self, ts: float, deadline: float, on_done: Callable):
+        done = False
+        try:
+            done_file = self._feedback_dir / "voice_done.json"
+            if done_file.exists():
+                data = json.loads(done_file.read_text(encoding="utf-8"))
+                if data.get("timestamp", 0) >= ts:
+                    done = True
+        except Exception:
+            pass
+        if done or time.time() >= deadline:
+            on_done()
+        else:
+            self.after(200, lambda: self._check_voice_done(ts, deadline, on_done))
 
     def _show_session(self):
         self._clear()
@@ -61,7 +89,7 @@ class StandaloneApp(ctk.CTk):
 
 
 class InstructionsFrame(ctk.CTkFrame):
-    def __init__(self, parent, config: dict, on_start: Callable, **kwargs):
+    def __init__(self, parent, config: dict, **kwargs):
         super().__init__(parent, **kwargs)
         name = config.get("name", "Exercise")
         instructions = config.get("client_instructions", "")
@@ -81,8 +109,6 @@ class InstructionsFrame(ctk.CTkFrame):
         box.pack(pady=(0, 30))
         box.insert("1.0", instructions)
         box.configure(state="disabled")
-
-        self.after(_display_ms(instructions), on_start)
 
 
 class SessionFrame(ctk.CTkFrame):
@@ -171,9 +197,6 @@ class SessionFrame(ctk.CTkFrame):
     def _start(self):
         self._relevant_joints = self._runner.get_relevant_joints()
         self._build_joint_labels()
-        instructions = self._runner.get_instructions()
-        if instructions:
-            self._write_message(". ".join(instructions), "instructions")
         self._runner.start_countdown()
         self._engine.subscribe(self._on_frame)
         self._engine.start()
@@ -246,7 +269,10 @@ class SessionFrame(ctk.CTkFrame):
         if state == "feedback" and not self._feedback_end_scheduled:
             self._feedback_end_scheduled = True
             deadline = time.time() + _VOICE_DONE_TIMEOUT_SECS
-            self.after(200, lambda: self._check_voice_done(self._last_message_ts, deadline))
+            app = self.winfo_toplevel()
+            self.after(200, lambda: app._check_voice_done(
+                self._last_message_ts, deadline, self._runner.end_feedback
+            ))
 
         if not self._feedback_panel_visible:
             self._update_camera(display)
@@ -266,33 +292,9 @@ class SessionFrame(ctk.CTkFrame):
         self.rep_label.configure(text=rep_text)
         self.feedback_label.configure(text=fb_text)
 
-    def _check_voice_done(self, ts: float, deadline: float):
-        if not self._active:
-            return
-        done = False
-        try:
-            done_file = self._feedback_dir / "voice_done.json"
-            if done_file.exists():
-                data = json.loads(done_file.read_text(encoding="utf-8"))
-                if data.get("timestamp", 0) >= ts:
-                    done = True
-        except Exception:
-            pass
-        if done or time.time() >= deadline:
-            self._runner.end_feedback()
-        else:
-            self.after(200, lambda: self._check_voice_done(ts, deadline))
-
     def _write_message(self, text: str, msg_type: str):
-        ts = time.time()
-        payload = {"timestamp": ts, "type": msg_type, "text": text}
-        try:
-            path = self._feedback_dir / "message.json"
-            path.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
-                            encoding="utf-8")
-            self._last_message_ts = ts
-        except Exception as e:
-            print(f"[app] failed to write message.json: {e}")
+        ts = self.winfo_toplevel()._write_message(text, msg_type)
+        self._last_message_ts = ts
 
     def _update_camera(self, bgr_frame: np.ndarray):
         rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
