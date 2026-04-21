@@ -74,10 +74,7 @@ class InstructionsFrame(ctk.CTkFrame):
         box.insert("1.0", instructions)
         box.configure(state="disabled")
 
-        ctk.CTkButton(
-            self, text="Start Session", height=48, width=200,
-            font=ctk.CTkFont(size=18, weight="bold"), command=on_start
-        ).pack()
+        self.after(3000, on_start)
 
 
 class SessionFrame(ctk.CTkFrame):
