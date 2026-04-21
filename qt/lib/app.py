@@ -20,7 +20,7 @@ _MIN_DISPLAY_SECS = 5
 
 def _display_ms(text: str) -> int:
     words = len(text.split())
-    return max(_MIN_DISPLAY_SECS, words * _SECS_PER_WORD) * 1000
+    return int(max(_MIN_DISPLAY_SECS, words * _SECS_PER_WORD) * 1000)
 
 
 class StandaloneApp(ctk.CTk):
