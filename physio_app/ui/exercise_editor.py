@@ -1,8 +1,10 @@
 import customtkinter as ctk
 import sqlite3
+import shutil
 import threading
 import os
 from pathlib import Path
+from tkinter import filedialog
 from PIL import Image
 import cv2
 from physio_app.services.exercise_service import ExerciseService
@@ -100,7 +102,9 @@ class ExerciseEditorFrame(ctk.CTkFrame):
         self.record_btn.pack(side="left", padx=(0, 8))
         self.stop_btn = ctk.CTkButton(btn_row, text="Stop", state="disabled",
                                       command=self._stop_recording)
-        self.stop_btn.pack(side="left")
+        self.stop_btn.pack(side="left", padx=(0, 8))
+        ctk.CTkButton(btn_row, text="Browse file…",
+                      command=self._browse_video).pack(side="left")
 
         self.video_status = ctk.CTkLabel(right, text="", text_color="gray")
         self.video_status.pack(anchor="w", pady=(4, 0))
@@ -196,6 +200,31 @@ class ExerciseEditorFrame(ctk.CTkFrame):
         self._video_path = path
         self.ex_svc.update(self.exercise_id, reference_video_path=path)
         self.video_status.configure(text="Saved: reference.mp4", text_color="#2ecc71")
+
+    def _browse_video(self):
+        src = filedialog.askopenfilename(
+            title="Choose reference video",
+            filetypes=[("Video files", "*.mp4 *.mov *.avi *.mkv"), ("All files", "*.*")],
+        )
+        if not src:
+            return
+        if self.exercise_id is None:
+            self.exercise_id = self._save_exercise()
+        dst = self._get_video_path(self.exercise_id)
+        Path(dst).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        self._video_path = dst
+        self.ex_svc.update(self.exercise_id, reference_video_path=dst)
+        self.video_status.configure(text=f"Video: {Path(src).name}", text_color="#2ecc71")
+        self._show_video_thumbnail(dst)
+
+    def _show_video_thumbnail(self, path: str):
+        cap = cv2.VideoCapture(path)
+        ret, frame = cap.read()
+        cap.release()
+        if not ret:
+            return
+        self._on_preview_frame(frame)
 
     def _on_preview_frame(self, bgr_frame):
         rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
