@@ -39,6 +39,11 @@ class PoseEngine:
         self._highlight_joints: set[str] = set()
         self._mp_pose = mp.solutions.pose
         self._lock = threading.Lock()
+        self._seek_start = False
+
+    def seek_to_start(self):
+        with self._lock:
+            self._seek_start = True
 
     def subscribe(self, callback: Callable[[PoseFrame, np.ndarray], None]):
         with self._lock:
@@ -75,9 +80,16 @@ class PoseEngine:
                 model_complexity=1,
             ) as pose:
                 while self._running and cap.isOpened():
+                    with self._lock:
+                        if self._seek_start:
+                            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                            self._seek_start = False
                     frame_start = time.time()
                     ret, frame = cap.read()
                     if not ret:
+                        if is_file:
+                            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                            continue
                         self._running = False
                         break
 

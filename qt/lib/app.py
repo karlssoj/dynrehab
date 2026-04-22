@@ -140,6 +140,7 @@ class SessionFrame(ctk.CTkFrame):
         self._last_message_ts: float = 0.0
         self._joint_value_labels: dict[str, ctk.CTkLabel] = {}
         self._active = True
+        self._prev_state: str = ""
         self._build()
         self._start()
 
@@ -276,6 +277,10 @@ class SessionFrame(ctk.CTkFrame):
             self.after(200, lambda: app._check_voice_done(
                 self._last_message_ts, deadline, self._runner.end_feedback
             ))
+
+        if self._prev_state == "countdown" and state == "exercise":
+            self._engine.seek_to_start()
+        self._prev_state = state
 
         if not self._feedback_panel_visible:
             self._update_camera(display)
