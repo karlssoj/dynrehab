@@ -26,11 +26,12 @@ def _display_ms(text: str) -> int:
 
 class StandaloneApp(ctk.CTk):
     def __init__(self, config: dict, analysis_module,
-                 feedback_dir: Path = None):
+                 feedback_dir: Path = None, video_source=0):
         super().__init__()
         self._config = config
         self._module = analysis_module
         self._feedback_dir = feedback_dir or Path(sys.argv[0]).resolve().parent
+        self._video_source = video_source
         self.title(config.get("name", "Exercise"))
         self.geometry("1100x700")
         ctk.set_appearance_mode("dark")
@@ -83,6 +84,7 @@ class StandaloneApp(ctk.CTk):
             self, self._config, self._module,
             feedback_dir=self._feedback_dir,
             on_done=lambda _: self.quit(),
+            video_source=self._video_source,
         )
         self._current_frame.pack(fill="both", expand=True)
 
@@ -122,11 +124,13 @@ class SessionFrame(ctk.CTkFrame):
 
     def __init__(self, parent, config: dict, analysis_module,
                  feedback_dir: Path,
-                 on_done: Callable[[dict], None], **kwargs):
+                 on_done: Callable[[dict], None],
+                 video_source=0, **kwargs):
         super().__init__(parent, **kwargs)
         self._config = config
         self._on_done = on_done
         self._feedback_dir = feedback_dir
+        self._video_source = video_source
         self._engine = PoseEngine()
         self._runner = SessionRunner(config, analysis_module)
         self._feedback_lines: list[str] = []
@@ -198,7 +202,7 @@ class SessionFrame(ctk.CTkFrame):
         self._build_joint_labels()
         self._runner.start_countdown()
         self._engine.subscribe(self._on_frame)
-        self._engine.start()
+        self._engine.start(self._video_source)
 
     def _on_frame(self, pose_frame: PoseFrame, annotated: np.ndarray):
         result = self._runner.process_frame(pose_frame.to_dict())

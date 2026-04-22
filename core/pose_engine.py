@@ -52,18 +52,21 @@ class PoseEngine:
         with self._lock:
             self._highlight_joints = set(joints)
 
-    def start(self, camera_index: int = 0):
+    def start(self, source=0):
         if self._running:
             return
         self._running = True
-        self._thread = threading.Thread(target=self._run, args=(camera_index,), daemon=True)
+        self._thread = threading.Thread(target=self._run, args=(source,), daemon=True)
         self._thread.start()
 
     def stop(self):
         self._running = False
 
-    def _run(self, camera_index: int):
-        cap = cv2.VideoCapture(camera_index)
+    def _run(self, source):
+        cap = cv2.VideoCapture(source)
+        is_file = isinstance(source, str)
+        raw_fps = cap.get(cv2.CAP_PROP_FPS) if is_file else 0.0
+        frame_delay = 1.0 / raw_fps if raw_fps > 0 else 0.0
         try:
             start_time = time.time()
             with self._mp_pose.Pose(
@@ -72,8 +75,10 @@ class PoseEngine:
                 model_complexity=1,
             ) as pose:
                 while self._running and cap.isOpened():
+                    frame_start = time.time()
                     ret, frame = cap.read()
                     if not ret:
+                        self._running = False
                         break
 
                     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -105,6 +110,12 @@ class PoseEngine:
                             cb(pose_frame, annotated)
                         except Exception:
                             pass
+
+                    if frame_delay > 0:
+                        elapsed = time.time() - frame_start
+                        remaining = frame_delay - elapsed
+                        if remaining > 0:
+                            time.sleep(remaining)
         finally:
             cap.release()
 
