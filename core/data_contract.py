@@ -37,6 +37,11 @@ class PoseFrame:
     left_thigh_angle: float = 0.0
     right_thigh_angle: float = 0.0
     shoulder_tilt: float = 0.0
+    shoulder_lateral_span: float = 0.0
+    hip_lateral_span: float = 0.0
+    knee_lateral_span: float = 0.0
+    ankle_lateral_span: float = 0.0
+    body_rotation_z: float = 0.0
     keypoints: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:

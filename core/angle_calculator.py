@@ -150,4 +150,16 @@ def calculate_angles(keypoints: dict) -> dict:
         # Bilateral tilt angles — primary for front view
         # Convention: 0° = both landmarks level, increases as one side is higher/lower
         "shoulder_tilt":       _vector_to_horizontal_angle(lm("left_shoulder"), lm("right_shoulder")),
+        # Lateral body span (normalized image x-axis distance between bilateral pairs)
+        # ~0 when body is fully sideways to camera; ~0.2-0.4 when facing forward/backward.
+        # Use to detect profile stance: span < 0.10-0.15 strongly indicates a side view.
+        "shoulder_lateral_span": abs(rs[0] - ls[0]),
+        "hip_lateral_span":      abs(rh[0] - lh[0]),
+        "knee_lateral_span":     abs(lm("left_knee")[0]  - lm("right_knee")[0]),
+        "ankle_lateral_span":    abs(lm("left_ankle")[0] - lm("right_ankle")[0]),
+        # Signed body rotation from z-depth (left_shoulder.z - right_shoulder.z).
+        # Positive → right side closer to camera (right-profile stance).
+        # Negative → left side closer to camera (left-profile stance).
+        # Use together with lateral spans; z is noisier than x/y so treat as directional hint.
+        "body_rotation_z":       ls[2] - rs[2],
     }
