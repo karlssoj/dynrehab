@@ -1,6 +1,7 @@
 import customtkinter as ctk
 import sqlite3
 import time
+import json
 import numpy as np
 import cv2
 from PIL import Image
@@ -25,6 +26,7 @@ class SessionViewFrame(ctk.CTkFrame):
         self._instructions_spoken = False   # True once instructions TTS has been queued
         self._countdown_triggered = False   # True once start_countdown() has been called
         self._exercise_secs: int = 0   # set properly in _start_session
+        self._feedback_mode: list[str] = ["after_window"]
         self._build()
         self._start_session()
 
@@ -94,9 +96,14 @@ class SessionViewFrame(ctk.CTkFrame):
             self.feedback_label.configure(text="No analysis module found for this exercise.")
             return
         self._exercise_secs = ex.session_duration_secs
+        try:
+            self._feedback_mode = json.loads(ex.feedback_mode) if ex.feedback_mode else ["after_window"]
+        except (json.JSONDecodeError, TypeError):
+            self._feedback_mode = ["after_window"]
         self._session = SessionService(exercise_id=self.exercise_id,
                                        module_code=module["code"],
-                                       exercise_secs=self._exercise_secs)
+                                       exercise_secs=self._exercise_secs,
+                                       feedback_mode=self._feedback_mode)
         instructions = self._session.get_instructions()
         if instructions:
             # Speak all lines joined as one message so nothing gets drained by the
@@ -209,6 +216,11 @@ class SessionViewFrame(ctk.CTkFrame):
             self._tts.speak_immediate(". ".join(feedback_lines))
             self._feedback_end_scheduled = False
             self._feedback_tts_started = False   # must observe TTS speaking before ending
+
+        rep_cue = result.get("rep_cue")
+        if rep_cue:
+            self._tts.speak(rep_cue)
+            self.feedback_label.configure(text=rep_cue)
 
         # Show/hide feedback panel based on state
         if state == "feedback" and not self._feedback_panel_visible:
@@ -324,10 +336,34 @@ class SessionViewFrame(ctk.CTkFrame):
         self.camera_label.grid(row=0, column=0, sticky="nsew", padx=(0, 15))
         self._feedback_panel_visible = False
 
+    def _show_summary_panel(self, lines: list[str]):
+        self._feedback_round_label.configure(text="Session Summary")
+        body_text = "\n\n".join(ln.strip() for ln in lines if ln.strip())
+        self._feedback_body.configure(state="normal")
+        self._feedback_body.delete("1.0", "end")
+        self._feedback_body.insert("1.0", body_text)
+        self._feedback_body.configure(state="disabled")
+        self.camera_label.grid_remove()
+        self._feedback_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 15))
+        self._feedback_panel_visible = True
+
+    def _wait_for_summary_then_home(self):
+        if self._tts.is_speaking():
+            self.after(200, self._wait_for_summary_then_home)
+        else:
+            self.app.show_launcher()
+
     def _end_session(self):
         self._tts.stop()
         self._engine.stop()
         self._engine.unsubscribe(self._on_frame)
+        if self._session and "after_exercise" in self._feedback_mode:
+            summary_lines = self._session.get_session_summary_speech()
+            if summary_lines:
+                self._show_summary_panel(summary_lines)
+                self._tts.speak_immediate(". ".join(summary_lines))
+                self._wait_for_summary_then_home()
+                return
         self.app.show_launcher()
 
     def _go_home(self):
