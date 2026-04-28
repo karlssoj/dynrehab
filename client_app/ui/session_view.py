@@ -27,6 +27,7 @@ class SessionViewFrame(ctk.CTkFrame):
         self._countdown_triggered = False   # True once start_countdown() has been called
         self._exercise_secs: int = 0   # set properly in _start_session
         self._feedback_mode: list[str] = ["after_window"]
+        self._last_rep_cue_time: float = 0.0
         self._build()
         self._start_session()
 
@@ -221,6 +222,7 @@ class SessionViewFrame(ctk.CTkFrame):
         if rep_cue:
             self._tts.speak(rep_cue)
             self.feedback_label.configure(text=rep_cue)
+            self._last_rep_cue_time = time.time()
 
         # Show/hide feedback panel based on state
         if state == "feedback" and not self._feedback_panel_visible:
@@ -255,7 +257,8 @@ class SessionViewFrame(ctk.CTkFrame):
             self.feedback_label.configure(text="Get ready!")
         elif state == "exercise":
             self.rep_label.configure(text=str(result["round_rep_count"]))
-            self.feedback_label.configure(text="EXERCISE")
+            if time.time() - self._last_rep_cue_time >= 2.0:
+                self.feedback_label.configure(text="EXERCISE")
         elif state == "feedback":
             self.rep_label.configure(text=str(result["round_rep_count"]))
             first_line = self._feedback_lines[0] if self._feedback_lines else ""
