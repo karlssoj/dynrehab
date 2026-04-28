@@ -244,3 +244,14 @@ def test_get_session_summary_speech_returns_list_with_rep_cues():
     assert isinstance(result, list)
     assert len(result) > 0
     assert "1 cues given" in result[0]
+
+
+def test_during_exercise_no_timeout_cue_before_5s():
+    svc = SessionService(
+        exercise_id="ex1", module_code=MODULE_WITH_REP_CUE,
+        exercise_secs=60, feedback_mode=["during_exercise"],
+    )
+    svc._enter_exercise()
+    svc._last_cue_time = time.time() - 2
+    result = svc.process_frame({"left_knee_angle": 170.0, "timestamp": 0.0})
+    assert result.get("rep_cue") is None

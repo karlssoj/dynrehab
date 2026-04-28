@@ -36,7 +36,7 @@ SAFE_BUILTINS["__import__"] = _make_safe_import()
 
 class SessionService:
     def __init__(self, exercise_id: str, module_code: str, exercise_secs: int = 10,
-                 feedback_mode: list[str] = None):
+                 feedback_mode: list[str] | None = None):
         self.exercise_id = exercise_id
         self._exercise_secs = exercise_secs
         self._feedback_mode = set(feedback_mode or ["after_window"])
@@ -73,6 +73,7 @@ class SessionService:
                 return list(self._get_instructions())
             except Exception:
                 return []
+        return []
 
     def get_relevant_joints(self) -> list:
         """Returns list of (display_label, pose_data_key) pairs from the module."""
@@ -155,8 +156,10 @@ class SessionService:
             time_left = self._exercise_secs - elapsed
             result["time_remaining"] = max(0.0, time_left)
             self._round_frames.append(pose_data)
+            _rep_detected = False
             try:
                 if bool(self._detect_rep(pose_data)):
+                    _rep_detected = True
                     self._round_rep_count += 1
                     self.rep_count += 1
                     if "during_exercise" in self._feedback_mode:
@@ -170,7 +173,8 @@ class SessionService:
             result["round_rep_count"] = self._round_rep_count
             result["total_reps"] = self.rep_count
 
-            if ("during_exercise" in self._feedback_mode
+            if (not _rep_detected
+                    and "during_exercise" in self._feedback_mode
                     and self._last_cue_time > 0
                     and time.time() - self._last_cue_time >= 5.0):
                 cue = self._call_rep_cue("timeout")
@@ -182,6 +186,7 @@ class SessionService:
             if elapsed >= self._exercise_secs and "after_window" in self._feedback_mode:
                 feedback = self._enter_feedback()
                 result["feedback_lines"] = feedback
+                result["time_remaining"] = 0.0
                 result["state"] = "feedback"
                 self._feedback_emitted = True
 
