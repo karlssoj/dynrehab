@@ -2,6 +2,7 @@ import customtkinter as ctk
 import sqlite3
 import threading
 import os
+import json as _json
 from physio_app.services.exercise_service import ExerciseService
 from physio_app.services.llm_service import LLMService
 
@@ -89,6 +90,8 @@ class CodeViewerFrame(ctk.CTkFrame):
         api_key = os.getenv("ANTHROPIC_API_KEY", "")
         llm_svc = LLMService(self.db_conn, api_key=api_key)
 
+        feedback_mode = _json.loads(ex.feedback_mode) if ex and ex.feedback_mode else ["after_window"]
+
         def run():
             module = llm_svc.generate_module(
                 ex.id, ex.name, ex.camera_view,
@@ -97,6 +100,7 @@ class CodeViewerFrame(ctk.CTkFrame):
                 boundary_values=ex.boundary_values,
                 display_values=ex.display_values,
                 session_duration_secs=ex.session_duration_secs,
+                feedback_mode=feedback_mode,
             )
             self.after(0, lambda: self._on_regen_done(module["status"]))
 

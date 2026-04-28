@@ -3,6 +3,7 @@ import sqlite3
 import shutil
 import threading
 import os
+import json
 from pathlib import Path
 from tkinter import filedialog
 from PIL import Image
@@ -86,6 +87,20 @@ class ExerciseEditorFrame(ctk.CTkFrame):
         self.session_duration_entry = ctk.CTkEntry(left, placeholder_text="10")
         self.session_duration_entry.pack(fill="x", pady=(0, 12))
 
+        ctk.CTkLabel(left, text="Feedback Mode").pack(anchor="w")
+        ctk.CTkLabel(left, text="When should feedback be given to the patient?",
+                     text_color="gray", font=ctk.CTkFont(size=11)).pack(anchor="w")
+        self._mode_window_var = ctk.BooleanVar(value=True)
+        self._mode_during_var = ctk.BooleanVar(value=False)
+        self._mode_after_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(left, text="After time window  (pause for feedback each round)",
+                        variable=self._mode_window_var,
+                        command=self._on_mode_changed).pack(anchor="w")
+        ctk.CTkCheckBox(left, text="During exercise  (short cue after each rep)",
+                        variable=self._mode_during_var).pack(anchor="w")
+        ctk.CTkCheckBox(left, text="After exercise  (summary when session ends)",
+                        variable=self._mode_after_var).pack(anchor="w", pady=(0, 12))
+
         # Right — video
         right = ctk.CTkFrame(content, fg_color="transparent")
         right.grid(row=0, column=1, sticky="nsew")
@@ -118,6 +133,10 @@ class ExerciseEditorFrame(ctk.CTkFrame):
         self.status_label = ctk.CTkLabel(bottom, text="")
         self.status_label.pack(side="left", padx=12)
 
+    def _on_mode_changed(self):
+        state = "normal" if self._mode_window_var.get() else "disabled"
+        self.session_duration_entry.configure(state=state)
+
     def _load(self, exercise_id: str):
         ex = self.ex_svc.get(exercise_id)
         if ex is None:
@@ -129,6 +148,14 @@ class ExerciseEditorFrame(ctk.CTkFrame):
         self.boundary_values_text.insert("1.0", ex.boundary_values)
         self.display_values_text.insert("1.0", ex.display_values)
         self.session_duration_entry.insert(0, str(ex.session_duration_secs))
+        try:
+            modes = json.loads(ex.feedback_mode) if ex.feedback_mode else ["after_window"]
+        except (json.JSONDecodeError, TypeError):
+            modes = ["after_window"]
+        self._mode_during_var.set("during_exercise" in modes)
+        self._mode_window_var.set("after_window" in modes)
+        self._mode_after_var.set("after_exercise" in modes)
+        self._on_mode_changed()
         if ex.reference_video_path:
             self._video_path = ex.reference_video_path
             self.video_status.configure(text=f"Video: {Path(ex.reference_video_path).name}")
@@ -243,6 +270,15 @@ class ExerciseEditorFrame(ctk.CTkFrame):
                 duration = 10
         except (ValueError, TypeError):
             duration = 10
+        modes = []
+        if self._mode_during_var.get():
+            modes.append("during_exercise")
+        if self._mode_window_var.get():
+            modes.append("after_window")
+        if self._mode_after_var.get():
+            modes.append("after_exercise")
+        if not modes:
+            modes = ["after_window"]
         return {
             "name": self.name_entry.get().strip() or "Unnamed Exercise",
             "camera_view": self.view_var.get(),
@@ -251,6 +287,7 @@ class ExerciseEditorFrame(ctk.CTkFrame):
             "boundary_values": self.boundary_values_text.get("1.0", "end").strip(),
             "display_values": self.display_values_text.get("1.0", "end").strip(),
             "session_duration_secs": duration,
+            "feedback_mode": json.dumps(modes),
         }
 
     def _save_exercise(self) -> str:
@@ -262,6 +299,7 @@ class ExerciseEditorFrame(ctk.CTkFrame):
             boundary_values=f["boundary_values"],
             display_values=f["display_values"],
             session_duration_secs=f["session_duration_secs"],
+            feedback_mode=f["feedback_mode"],
         )
         return ex.id
 
@@ -281,6 +319,7 @@ class ExerciseEditorFrame(ctk.CTkFrame):
                 boundary_values=f["boundary_values"],
                 display_values=f["display_values"],
                 session_duration_secs=f["session_duration_secs"],
+                feedback_mode=f["feedback_mode"],
             )
         else:
             self.exercise_id = self._save_exercise()
@@ -299,6 +338,7 @@ class ExerciseEditorFrame(ctk.CTkFrame):
                 boundary_values=f["boundary_values"],
                 display_values=f["display_values"],
                 session_duration_secs=f["session_duration_secs"],
+                feedback_mode=json.loads(f["feedback_mode"]),
             )
             self.after(0, lambda: self._on_generation_done(module["status"]))
 
