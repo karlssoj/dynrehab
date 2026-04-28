@@ -350,11 +350,19 @@ class SessionViewFrame(ctk.CTkFrame):
         self._feedback_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 15))
         self._feedback_panel_visible = True
 
-    def _wait_for_summary_then_home(self):
-        if self._tts.is_speaking():
-            self.after(200, self._wait_for_summary_then_home)
-        else:
+    def _wait_for_summary_then_home(self, _seen_speaking: bool = False, _deadline: float = 0.0):
+        if _deadline == 0.0:
+            _deadline = time.time() + 10.0
+        if time.time() >= _deadline:
             self.app.show_launcher()
+            return
+        speaking = self._tts.is_speaking()
+        if speaking:
+            self.after(200, lambda: self._wait_for_summary_then_home(True, _deadline))
+        elif _seen_speaking:
+            self.app.show_launcher()
+        else:
+            self.after(200, lambda: self._wait_for_summary_then_home(False, _deadline))
 
     def _end_session(self):
         self._tts.stop()
