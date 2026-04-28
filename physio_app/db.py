@@ -30,6 +30,7 @@ def _create_tables(conn: sqlite3.Connection):
             boundary_values TEXT DEFAULT '',
             display_values TEXT DEFAULT '',
             session_duration_secs INTEGER DEFAULT 10,
+            feedback_mode TEXT DEFAULT '["after_window"]',
             reference_video_path TEXT DEFAULT '',
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
@@ -82,5 +83,11 @@ def _migrate(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE exercises ADD COLUMN display_values TEXT DEFAULT ''")
         conn.execute(
             "ALTER TABLE exercises ADD COLUMN session_duration_secs INTEGER DEFAULT 10"
+        )
+        conn.commit()
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(exercises)")}
+    if "feedback_mode" not in cols:
+        conn.execute(
+            "ALTER TABLE exercises ADD COLUMN feedback_mode TEXT DEFAULT '[\"after_window\"]'"
         )
         conn.commit()

@@ -1,3 +1,4 @@
+import json
 import pytest
 from physio_app.services.exercise_service import ExerciseService
 
@@ -84,3 +85,24 @@ def test_list_modules(tmp_db):
     modules = svc.list_modules(ex.id)
     assert len(modules) == 2
     assert modules[0]["version"] == 2
+
+
+def test_create_with_feedback_mode(tmp_db):
+    svc = ExerciseService(tmp_db)
+    ex = svc.create("Squat", "side", feedback_mode='["during_exercise","after_window"]')
+    fetched = svc.get(ex.id)
+    assert fetched.feedback_mode == '["during_exercise","after_window"]'
+
+
+def test_create_default_feedback_mode(tmp_db):
+    svc = ExerciseService(tmp_db)
+    ex = svc.create("Squat", "side")
+    modes = json.loads(svc.get(ex.id).feedback_mode)
+    assert modes == ["after_window"]
+
+
+def test_update_feedback_mode(tmp_db):
+    svc = ExerciseService(tmp_db)
+    ex = svc.create("Squat", "side")
+    updated = svc.update(ex.id, feedback_mode='["after_exercise"]')
+    assert updated.feedback_mode == '["after_exercise"]'

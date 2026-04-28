@@ -15,6 +15,7 @@ class Exercise:
     display_values: str
     session_duration_secs: int
     reference_video_path: str
+    feedback_mode: str
     created_at: str
 
 
@@ -27,15 +28,16 @@ class ExerciseService:
                llm_instructions: str = "",
                boundary_values: str = "",
                display_values: str = "",
-               session_duration_secs: int = 10) -> Exercise:
+               session_duration_secs: int = 10,
+               feedback_mode: str = '["after_window"]') -> Exercise:
         ex_id = str(uuid.uuid4())
         self.conn.execute(
             "INSERT INTO exercises "
             "(id, name, camera_view, client_instructions, llm_instructions, "
-            "boundary_values, display_values, session_duration_secs) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "boundary_values, display_values, session_duration_secs, feedback_mode) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (ex_id, name, camera_view, client_instructions, llm_instructions,
-             boundary_values, display_values, session_duration_secs),
+             boundary_values, display_values, session_duration_secs, feedback_mode),
         )
         self.conn.commit()
         return self.get(ex_id)
@@ -58,7 +60,8 @@ class ExerciseService:
                client_instructions: Optional[str] = None, llm_instructions: Optional[str] = None,
                boundary_values: Optional[str] = None, display_values: Optional[str] = None,
                session_duration_secs: Optional[int] = None,
-               reference_video_path: Optional[str] = None) -> Exercise:
+               reference_video_path: Optional[str] = None,
+               feedback_mode: Optional[str] = None) -> Exercise:
         updates, params = [], []
         for col, val in [
             ("name", name), ("camera_view", camera_view),
@@ -68,6 +71,7 @@ class ExerciseService:
             ("display_values", display_values),
             ("session_duration_secs", session_duration_secs),
             ("reference_video_path", reference_video_path),
+            ("feedback_mode", feedback_mode),
         ]:
             if val is not None:
                 updates.append(f"{col} = ?")
@@ -153,5 +157,6 @@ class ExerciseService:
             display_values=d.get("display_values") or "",
             session_duration_secs=int(d["session_duration_secs"]) if d.get("session_duration_secs") is not None else 10,
             reference_video_path=d.get("reference_video_path") or "",
+            feedback_mode=d.get("feedback_mode") or '["after_window"]',
             created_at=d.get("created_at") or "",
         )
