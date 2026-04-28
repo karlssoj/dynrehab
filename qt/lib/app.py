@@ -135,6 +135,8 @@ class SessionFrame(ctk.CTkFrame):
         self._runner = SessionRunner(config, analysis_module)
         self._feedback_lines: list[str] = []
         self._exercise_secs: int = config.get("session_duration_secs", 60)
+        self._feedback_mode: list[str] = config.get("feedback_mode", ["after_window"])
+        self._last_rep_cue_time: float = 0.0
         self._feedback_panel_visible = False
         self._feedback_end_scheduled = False
         self._last_message_ts: float = 0.0
@@ -265,6 +267,12 @@ class SessionFrame(ctk.CTkFrame):
             self._write_message(". ".join(feedback_lines), "feedback")
             self._feedback_end_scheduled = False
 
+        rep_cue = result.get("rep_cue")
+        if rep_cue:
+            self._write_message(rep_cue, "rep_cue")
+            self.feedback_label.configure(text=rep_cue)
+            self._last_rep_cue_time = time.time()
+
         if state == "feedback" and not self._feedback_panel_visible:
             self._show_feedback_panel(result["round_number"])
         elif state != "feedback" and self._feedback_panel_visible:
@@ -290,7 +298,7 @@ class SessionFrame(ctk.CTkFrame):
 
         label_map = {
             "countdown": (str(result["round_number"] + 1), "Get ready!"),
-            "exercise": (str(result["round_rep_count"]), ""),
+            "exercise": (str(result["round_rep_count"]), None),
             "feedback": (
                 str(result["round_rep_count"]),
                 self._feedback_lines[0] if self._feedback_lines else "",
@@ -298,7 +306,11 @@ class SessionFrame(ctk.CTkFrame):
         }
         rep_text, fb_text = label_map.get(state, ("—", ""))
         self.rep_label.configure(text=rep_text)
-        self.feedback_label.configure(text=fb_text)
+        if state == "exercise":
+            if time.time() - self._last_rep_cue_time >= 2.0:
+                self.feedback_label.configure(text="")
+        elif fb_text is not None:
+            self.feedback_label.configure(text=fb_text)
 
     def _write_message(self, text: str, msg_type: str):
         ts = self.winfo_toplevel()._write_message(text, msg_type)
@@ -359,10 +371,33 @@ class SessionFrame(ctk.CTkFrame):
         self.camera_label.grid(row=0, column=0, sticky="nsew", padx=(0, 15))
         self._feedback_panel_visible = False
 
+    def _show_summary_panel(self, lines: list[str]):
+        self._feedback_round_label.configure(text="Session Summary")
+        body_text = "\n\n".join(ln.strip() for ln in lines if ln.strip())
+        self._feedback_body.configure(state="normal")
+        self._feedback_body.delete("1.0", "end")
+        self._feedback_body.insert("1.0", body_text)
+        self._feedback_body.configure(state="disabled")
+        self.camera_label.grid_remove()
+        self._feedback_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 15))
+        self._feedback_panel_visible = True
+
     def _end_session(self):
         self._active = False
         self._engine.stop()
         self._engine.unsubscribe(self._on_frame)
+        if "after_exercise" in self._feedback_mode:
+            summary_lines = self._runner.get_session_summary_speech()
+            if summary_lines:
+                self._show_summary_panel(summary_lines)
+                self._write_message(". ".join(summary_lines), "summary")
+                deadline = time.time() + _VOICE_DONE_TIMEOUT_SECS
+                app = self.winfo_toplevel()
+                self.after(200, lambda: app._check_voice_done(
+                    self._last_message_ts, deadline,
+                    lambda: self._on_done(self._runner.get_summary())
+                ))
+                return
         self._on_done(self._runner.get_summary())
 
 
