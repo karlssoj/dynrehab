@@ -177,11 +177,11 @@ class SessionService:
                     and "during_exercise" in self._feedback_mode
                     and self._last_cue_time > 0
                     and time.time() - self._last_cue_time >= 5.0):
+                self._last_cue_time = time.time()
                 cue = self._call_rep_cue("timeout")
                 if cue:
                     result["rep_cue"] = cue
                     self._rep_cues.append(cue)
-                    self._last_cue_time = time.time()
 
             if elapsed >= self._exercise_secs and "after_window" in self._feedback_mode:
                 feedback = self._enter_feedback()

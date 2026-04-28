@@ -132,7 +132,7 @@ def test_during_exercise_emits_rep_cue():
     runner = SessionRunner(config, _RepCueModule())
     runner._state = "exercise"
     runner._state_wall_start = time.time()
-    runner._last_cue_time = time.time()
+    runner._last_cue_time = 0.0
     result = runner.process_frame(_EMPTY_POSE)
     assert result.get("rep_cue") == "Good rep!"
 
@@ -150,3 +150,4 @@ def test_get_session_summary_speech_returns_list():
     runner = SessionRunner(_CONFIG, _FakeModule())
     result = runner.get_session_summary_speech()
     assert isinstance(result, list)
+    assert result == ["Session done."]
