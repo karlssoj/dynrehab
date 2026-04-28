@@ -14,8 +14,8 @@ class Exercise:
     boundary_values: str
     display_values: str
     session_duration_secs: int
-    reference_video_path: str
     feedback_mode: str = '["after_window"]'
+    reference_video_path: str = ""
     created_at: str = ""
 
 
