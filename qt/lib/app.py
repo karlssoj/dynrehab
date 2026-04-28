@@ -136,7 +136,8 @@ class SessionFrame(ctk.CTkFrame):
         self._feedback_lines: list[str] = []
         self._exercise_secs: int = config.get("session_duration_secs", 60)
         self._feedback_mode: list[str] = config.get("feedback_mode", ["after_window"])
-        self._last_rep_cue_time: float = 0.0
+        self._last_rep_cue_time: float = time.time()
+        self._last_rep_cue: str = ""
         self._feedback_panel_visible = False
         self._feedback_end_scheduled = False
         self._last_message_ts: float = 0.0
@@ -268,7 +269,8 @@ class SessionFrame(ctk.CTkFrame):
             self._feedback_end_scheduled = False
 
         rep_cue = result.get("rep_cue")
-        if rep_cue:
+        if rep_cue and rep_cue != self._last_rep_cue:
+            self._last_rep_cue = rep_cue
             self._write_message(rep_cue, "rep_cue")
             self.feedback_label.configure(text=rep_cue)
             self._last_rep_cue_time = time.time()
@@ -283,7 +285,8 @@ class SessionFrame(ctk.CTkFrame):
             deadline = time.time() + _VOICE_DONE_TIMEOUT_SECS
             app = self.winfo_toplevel()
             self.after(200, lambda: app._check_voice_done(
-                self._last_message_ts, deadline, self._runner.end_feedback
+                self._last_message_ts, deadline,
+                lambda: self._runner.end_feedback() if self._active else None
             ))
 
         if self._prev_state == "countdown" and state == "exercise":
@@ -383,6 +386,7 @@ class SessionFrame(ctk.CTkFrame):
         self._feedback_panel_visible = True
 
     def _end_session(self):
+        self._feedback_end_scheduled = True
         self._active = False
         self._engine.stop()
         self._engine.unsubscribe(self._on_frame)
