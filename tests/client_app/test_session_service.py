@@ -130,7 +130,7 @@ def test_get_session_summary_speech():
     svc.process_frame({"left_knee_angle": 90.0, "timestamp": 0.1})
     svc.process_frame({"left_knee_angle": 170.0, "timestamp": 0.2})
     speech = svc.get_session_summary_speech()
-    assert isinstance(speech, str)
+    assert isinstance(speech, list)
     assert len(speech) > 0
 
 
@@ -154,3 +154,93 @@ def test_angle_stats_tracked():
     assert "left_knee_angle" in svc._angle_stats
     assert svc._angle_stats["left_knee_angle"]["min"] == 90.0
     assert svc._angle_stats["left_knee_angle"]["max"] == 170.0
+
+
+MODULE_WITH_REP_CUE = """
+_phase = "ready"
+
+def detect_rep(pose_data):
+    global _phase
+    angle = pose_data.get("left_knee_angle", 180)
+    if _phase == "ready" and angle < 100:
+        _phase = "bent"
+    elif _phase == "bent" and angle > 160:
+        _phase = "ready"
+        return True
+    return False
+
+def reset_round():
+    global _phase
+    _phase = "ready"
+
+def generate_rep_cue(cue_data):
+    if cue_data.get("trigger") == "timeout":
+        return "Keep going!"
+    return "Good squat!"
+
+def generate_round_feedback(round_data):
+    return ["Round done."]
+
+def get_session_summary(session_data):
+    cues = session_data.get("rep_cues", [])
+    return [f"Session done. {len(cues)} cues given."]
+"""
+
+
+def test_during_exercise_emits_rep_cue_after_rep():
+    svc = SessionService(
+        exercise_id="ex1", module_code=MODULE_WITH_REP_CUE,
+        exercise_secs=10, feedback_mode=["during_exercise"],
+    )
+    svc._enter_exercise()
+    svc.process_frame({"left_knee_angle": 90.0, "timestamp": 0.1})
+    result = svc.process_frame({"left_knee_angle": 170.0, "timestamp": 0.2})
+    assert result.get("rep_cue") == "Good squat!"
+
+
+def test_during_exercise_timeout_cue_fires_after_5s():
+    svc = SessionService(
+        exercise_id="ex1", module_code=MODULE_WITH_REP_CUE,
+        exercise_secs=60, feedback_mode=["during_exercise"],
+    )
+    svc._enter_exercise()
+    svc._last_cue_time -= 6
+    result = svc.process_frame({"left_knee_angle": 170.0, "timestamp": 0.0})
+    assert result.get("rep_cue") == "Keep going!"
+
+
+def test_no_after_window_mode_exercise_continues_past_window():
+    svc = SessionService(
+        exercise_id="ex1", module_code=MODULE_WITH_REP_CUE,
+        exercise_secs=10, feedback_mode=["during_exercise"],
+    )
+    svc._enter_exercise()
+    svc._state_wall_start -= 11
+    result = svc.process_frame({"left_knee_angle": 170.0, "timestamp": 0.0})
+    assert result["state"] == "exercise"
+    assert result.get("feedback_lines") is None
+
+
+def test_after_window_mode_still_triggers_feedback():
+    svc = SessionService(
+        exercise_id="ex1", module_code=MODULE_WITH_REP_CUE,
+        exercise_secs=10, feedback_mode=["after_window"],
+    )
+    svc._enter_exercise()
+    svc._state_wall_start -= 11
+    result = svc.process_frame({"left_knee_angle": 170.0, "timestamp": 0.0})
+    assert result["state"] == "feedback"
+    assert result["feedback_lines"] is not None
+
+
+def test_get_session_summary_speech_returns_list_with_rep_cues():
+    svc = SessionService(
+        exercise_id="ex1", module_code=MODULE_WITH_REP_CUE,
+        exercise_secs=60, feedback_mode=["during_exercise", "after_exercise"],
+    )
+    svc._enter_exercise()
+    svc._rep_cues.append("Good squat!")
+    result = svc.get_session_summary_speech()
+    assert isinstance(result, list)
+    assert len(result) > 0
+    assert "1 cues given" in result[0]

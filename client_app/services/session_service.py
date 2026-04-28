@@ -35,10 +35,12 @@ SAFE_BUILTINS["__import__"] = _make_safe_import()
 
 
 class SessionService:
-    def __init__(self, exercise_id: str, module_code: str, exercise_secs: int = 10):
+    def __init__(self, exercise_id: str, module_code: str, exercise_secs: int = 10,
+                 feedback_mode: list[str] = None):
         self.exercise_id = exercise_id
         self._exercise_secs = exercise_secs
-        self.rep_count = 0          # total all rounds
+        self._feedback_mode = set(feedback_mode or ["after_window"])
+        self.rep_count = 0
         self._round_number = 0
         self._round_rep_count = 0
         self._round_frames: list[dict] = []
@@ -49,13 +51,17 @@ class SessionService:
         self._state_wall_start = time.time()
         self._countdown_last: Optional[int] = None
         self._feedback_emitted = False
+        self._last_cue_time: float = 0.0
+        self._rep_cues: list[str] = []
+        self._round_feedback_history: list[list[str]] = []
         self._load_module(module_code)
 
     def _load_module(self, code: str):
         namespace = {"__builtins__": SAFE_BUILTINS}
         exec(code, namespace)
         self._detect_rep = namespace["detect_rep"]
-        self._generate_round_feedback = namespace["generate_round_feedback"]
+        self._generate_round_feedback = namespace.get("generate_round_feedback")
+        self._generate_rep_cue = namespace.get("generate_rep_cue")
         self._get_session_summary = namespace.get("get_session_summary")
         self._get_instructions = namespace.get("get_instructions")
         self._reset_round = namespace.get("reset_round")
@@ -76,6 +82,22 @@ class SessionService:
             except Exception:
                 return []
         return []
+
+    def _call_rep_cue(self, trigger: str) -> Optional[str]:
+        if not self._generate_rep_cue:
+            return None
+        cue_data = {
+            "trigger": trigger,
+            "rep_number": self.rep_count,
+            "round_number": self._round_number if "after_window" in self._feedback_mode else None,
+            "frames": list(self._round_frames[-30:]),
+        }
+        try:
+            result = self._generate_rep_cue(cue_data)
+            return str(result).strip() or None
+        except Exception as e:
+            print(f"[session] generate_rep_cue error: {e}")
+            return None
 
     def start_countdown(self):
         """Called by view when instructions speech is done."""
@@ -137,11 +159,27 @@ class SessionService:
                 if bool(self._detect_rep(pose_data)):
                     self._round_rep_count += 1
                     self.rep_count += 1
+                    if "during_exercise" in self._feedback_mode:
+                        cue = self._call_rep_cue("rep")
+                        if cue:
+                            result["rep_cue"] = cue
+                            self._rep_cues.append(cue)
+                            self._last_cue_time = time.time()
             except Exception as e:
                 print(f"[session] detect_rep error: {e}")
             result["round_rep_count"] = self._round_rep_count
             result["total_reps"] = self.rep_count
-            if elapsed >= self._exercise_secs:
+
+            if ("during_exercise" in self._feedback_mode
+                    and self._last_cue_time > 0
+                    and time.time() - self._last_cue_time >= 5.0):
+                cue = self._call_rep_cue("timeout")
+                if cue:
+                    result["rep_cue"] = cue
+                    self._rep_cues.append(cue)
+                    self._last_cue_time = time.time()
+
+            if elapsed >= self._exercise_secs and "after_window" in self._feedback_mode:
                 feedback = self._enter_feedback()
                 result["feedback_lines"] = feedback
                 result["state"] = "feedback"
@@ -156,6 +194,7 @@ class SessionService:
         return result
 
     def _enter_exercise(self):
+        self._last_cue_time = time.time()
         self._state = "exercise"
         self._state_wall_start = time.time()
         self._round_number += 1
@@ -179,25 +218,33 @@ class SessionService:
         }
         self._all_rounds.append(round_data)
         try:
-            lines = self._generate_round_feedback(round_data)
-            return list(lines) if lines else ["Round complete."]
+            lines = self._generate_round_feedback(round_data) if self._generate_round_feedback else None
+            lines = list(lines) if lines else ["Round complete."]
         except Exception as e:
             print(f"[session] generate_round_feedback error: {e}")
-            return ["Round complete."]
+            lines = ["Round complete."]
+        self._round_feedback_history.append(lines)
+        return lines
 
-    def get_session_summary_speech(self) -> str:
+    def get_session_summary_speech(self) -> list[str]:
         if not self._get_session_summary:
-            return ""
+            return []
         session_data = {
             "total_reps": self.rep_count,
+            "total_duration_seconds": time.time() - self._started_at,
             "rounds": list(self._all_rounds),
-            "duration_seconds": time.time() - self._started_at,
+            "rep_cues": list(self._rep_cues),
+            "round_feedback": list(self._round_feedback_history),
             "angle_stats": dict(self._angle_stats),
         }
         try:
-            return str(self._get_session_summary(session_data))
-        except Exception:
-            return ""
+            result = self._get_session_summary(session_data)
+            if isinstance(result, list):
+                return [str(s) for s in result if s]
+            return [str(result)] if result else []
+        except Exception as e:
+            print(f"[session] get_session_summary error: {e}")
+            return []
 
     def get_summary(self) -> dict:
         return {
