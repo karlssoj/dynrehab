@@ -139,110 +139,6 @@ LYING / SEATED / KNEELING exercises:
 """
 
 
-_FUNCTION_SPEC_TEMPLATE = """\
-Implement exactly these five functions (three required, two optional):
-
-def get_instructions() -> list[str]:
-    # OPTIONAL. Return 1-2 short sentences that tell the patient:
-    # (1) how to stand relative to the camera, and (2) what movement to do.
-    # Keep it brief — it is spoken aloud immediately before the countdown starts.
-
-def detect_rep(pose_data: dict) -> bool:
-    # REQUIRED. Called every frame during the exercise window.
-    # Return True exactly once when a rep attempt is detected. Silent — no feedback.
-    # CRITICAL: Do NOT use the physiotherapist's boundary values as detection thresholds.
-    # Boundary values are quality targets for feedback — they are NOT gates for counting reps.
-    # A patient who squats to 60° when the boundary is 90° MUST still have a rep counted
-    # so generate_round_feedback() can coach them on the gap.
-    # Use your own LOOSE anatomical thresholds (e.g. any knee bend > 20° counts as a squat
-    # attempt, any elbow bend > 20° counts as a curl attempt).
-    # Use a simple phase state machine: ready → moving → ready.
-    # For exercises where a joint moves away from rest and returns:
-    #   Phase "moving" starts when angle crosses a LOOSE threshold in movement direction
-    #   Rep counted when angle returns past a separate return threshold
-    # Use module-level variables for phase state. reset_round() resets them.
-
-def reset_round():
-    # OPTIONAL. Reset detect_rep state variables before each new exercise window.
-    # Reset phase back to "ready" or "start", clear any history deques, etc.
-
-def generate_round_feedback(round_data: dict) -> list[str]:
-    # REQUIRED. Called once after each exercise window.
-    # round_data: {
-    #   "round_number": int,
-    #   "rep_count": int,
-    #   "frames": list[dict],       # pose_data frames collected during exercise window
-    #   "duration_seconds": float
-    # }
-    # Return 2-4 spoken sentences as a list of strings.
-    # BOUNDARY VALUES USAGE: The physiotherapist's boundary values are quality targets.
-    # Compare the patient's actual measured values (from frames) against those targets
-    # and report HOW CLOSE they came. Describe the gap and give specific coaching.
-    # NEVER return "no movement detected" or similar if frames contain any recognizable
-    # movement attempt — even a partial attempt deserves specific feedback.
-    # "No movement" should only appear if frames show literally no joint movement
-    # (e.g. the patient walked away from camera or was completely still).
-    # - ALWAYS run all quality checks (pelvic tilt, knee valgus, trunk lean, etc.)
-    #   regardless of rep_count. Do NOT return early after the rep-count message.
-    # - ALWAYS give at least one specific positive observation — never leave the
-    #   feedback at just a rep-count acknowledgement. Measure what was done well
-    #   and say it explicitly: "Your squat depth was excellent — you reached parallel",
-    #   "Your back stayed straight throughout", "Good knee alignment throughout".
-    #   The positive observation must be based on actual measured values from frames,
-    #   not a generic compliment.
-    # - If rep_count is 0 but movement was detected in frames: describe what the patient
-    #   did ("you squatted about halfway down") and what they need to do differently
-    #   ("bend your knees further — aim for a deeper squat").
-    # - If rep_count > 0: open with rep count + one specific positive quality observation,
-    #   then add corrective cues only for issues that actually occurred.
-    #   If form was good across all checks, give two positive observations instead.
-    # - Give verbal coaching cues a physiotherapist would say out loud.
-    #   Describe movement quality in plain language ("bend your arms more",
-    #   "lean further forward", "snap back upright between each rep").
-    #   By default do NOT say raw angle values — they mean nothing to most patients.
-    #   EXCEPTION: if the physiotherapist's instructions explicitly ask for angle
-    #   values in feedback (e.g. "report the knee angle"), then include them.
-    # - Use separate if statements (NOT elif) for independent quality checks.
-    # - Keep each sentence concise — they will be spoken aloud.
-
-def get_relevant_joints() -> list:
-    # OPTIONAL. Returns which joint values to display in the sidebar during the session.
-    # Each entry is a (display_label, pose_data_key) pair.
-    # pose_data_key must be a key that exists in the pose_data dict.
-    # IMPORTANT: Return ONLY the joints that were explicitly listed in the
-    # "Display Values" field. Do NOT add extra joints beyond what was requested.
-    # If no Display Values were specified, return the 1-2 most clinically relevant joints.
-    # Keep display labels short (≤ 12 chars) — they appear in a narrow sidebar.
-    #
-    # All angles are now computed from x,y only, so the same keys work for both
-    # front-view and side-view exercises.
-    # For squats/lunges: use "left_knee_bend_2d" / "right_knee_bend_2d" (0=straight).
-    # The UI automatically converts raw angle fields (left_knee_angle etc.) to 0=straight
-    # convention, so either form is safe to use.
-    # Example: [("L knee bend", "left_knee_bend_2d"), ("R knee bend", "right_knee_bend_2d")]
-
-def get_session_summary(session_data: dict) -> str:
-    # REQUIRED. Called once when the patient ends the session.
-    # session_data: {
-    #   "total_reps": int,
-    #   "rounds": [{"round_number": int, "rep_count": int, "frames": list[dict],
-    #               "duration_seconds": float}, ...],
-    #   "duration_seconds": float,
-    #   "angle_stats": {angle_name: {"min": float, "max": float}, ...}
-    # }
-    # "angle_stats" has the min and max of every angle seen across the whole session.
-    # REQUIREMENTS:
-    # - Only report on joints clinically relevant to THIS exercise.
-    # - Use angle_stats to determine what quality level the patient reached.
-    #   Phrase feedback as verbal coaching by default — no raw degree values —
-    #   unless the physiotherapist's instructions explicitly request angle values.
-    # - ALWAYS mention at least one thing the patient did well based on the data,
-    #   in addition to any corrective cues. If the session was strong, lead with praise.
-    # - If total_reps is 0, explain what the patient should do differently.
-    # - Ignore any angle_stats entry whose "min" < 10.0 — it is a detection artifact.
-    # - Return a single string, 2-4 sentences maximum.
-"""
-
 _FEW_SHOT = """\
 Example — skiing double-pole from the side (tested pattern; follow its structure closely):
 
@@ -739,8 +635,6 @@ Analysis instructions (what to look for and what feedback to give):
 
 Display values (which values to show on screen during motion analysis):
 {display_values}
-
-Session duration: {session_duration_secs} seconds per exercise window
 
 Available pose data fields:
 {_POSE_DATA_DESCRIPTION}

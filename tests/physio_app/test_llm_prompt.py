@@ -20,7 +20,6 @@ def test_prompt_contains_all_five_sections():
     assert "Analysis instructions" in prompt
     assert "Boundary values" in prompt
     assert "Display values" in prompt
-    assert "Session duration" in prompt
 
 
 def test_prompt_uses_custom_duration_in_function_spec():
