@@ -124,6 +124,11 @@ def _slugify(name: str) -> str:
 
 
 def _render_config(ex) -> str:
+    import json as _json
+    try:
+        feedback_mode = _json.loads(ex.feedback_mode) if ex.feedback_mode else ["after_window"]
+    except (ValueError, TypeError):
+        feedback_mode = ["after_window"]
     lines = [
         "CONFIG = {",
         f"    \"name\": {repr(ex.name)},",
@@ -131,6 +136,7 @@ def _render_config(ex) -> str:
         f"    \"client_instructions\": {repr(ex.client_instructions)},",
         f"    \"display_values\": {repr(ex.display_values)},",
         f"    \"session_duration_secs\": {ex.session_duration_secs},",
+        f"    \"feedback_mode\": {_json.dumps(feedback_mode)},",
         "}",
         "",
     ]

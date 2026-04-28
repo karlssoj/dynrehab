@@ -28,6 +28,7 @@ class _FakeExercise:
     client_instructions = "Stand with feet shoulder-width apart."
     display_values = "left_knee_bend_2d"
     session_duration_secs = 60
+    feedback_mode = '["after_window"]'
 
 
 def test_render_config_contains_name():
@@ -156,3 +157,19 @@ def test_generate_skips_missing_exercise(tmp_path, monkeypatch):
     conn = _seed_db(tmp_path)
     StandaloneGenerator.generate("no-such-id", conn)  # must not raise
     assert not (tmp_path / "qt").exists()
+
+
+def test_render_config_includes_feedback_mode():
+    from physio_app.services.standalone_generator import _render_config
+    from physio_app.services.exercise_service import Exercise
+
+    ex = Exercise(
+        id="x", name="Squat", camera_view="side",
+        client_instructions="Stand", llm_instructions="",
+        boundary_values="", display_values="",
+        session_duration_secs=10,
+        feedback_mode='["during_exercise","after_window"]',
+    )
+    config_code = _render_config(ex)
+    assert '"feedback_mode"' in config_code
+    assert "during_exercise" in config_code
