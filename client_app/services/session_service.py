@@ -160,11 +160,11 @@ class SessionService:
                     self._round_rep_count += 1
                     self.rep_count += 1
                     if "during_exercise" in self._feedback_mode:
+                        self._last_cue_time = time.time()
                         cue = self._call_rep_cue("rep")
                         if cue:
                             result["rep_cue"] = cue
                             self._rep_cues.append(cue)
-                            self._last_cue_time = time.time()
             except Exception as e:
                 print(f"[session] detect_rep error: {e}")
             result["round_rep_count"] = self._round_rep_count
