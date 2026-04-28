@@ -503,8 +503,104 @@ def get_session_summary(session_data):
 """
 
 
-def _build_function_spec(session_duration_secs: int) -> str:
-    return _FUNCTION_SPEC_TEMPLATE.replace("10-second", f"{session_duration_secs}-second")
+def _build_function_spec(session_duration_secs: int, feedback_mode: list) -> str:
+    modes = set(feedback_mode) if feedback_mode else {"after_window"}
+
+    required = []
+    if "during_exercise" in modes:
+        required.append("generate_rep_cue")
+    if "after_window" in modes:
+        required.append("generate_round_feedback")
+    if "after_exercise" in modes:
+        required.append("get_session_summary")
+
+    parts = [f"Implement these functions (required: {', '.join(required) or 'detect_rep'}):\n"]
+
+    parts.append("""\
+def get_instructions() -> list[str]:
+    # OPTIONAL. Return 1-2 short sentences spoken aloud before countdown.
+    # (1) where to stand, (2) what movement to do.
+
+def detect_rep(pose_data: dict) -> bool:
+    # REQUIRED. Called every frame during exercise.
+    # Return True exactly once per completed rep attempt.
+    # Use LOOSE anatomical thresholds — count any recognisable attempt.
+    # Use a phase state machine: ready → moving → ready.
+    # Use module-level variables. reset_round() resets them.
+
+def reset_round():
+    # OPTIONAL. Reset detect_rep state before each new window / rep cycle.
+""")
+
+    if "during_exercise" in modes:
+        parts.append("""\
+def generate_rep_cue(cue_data: dict) -> str:
+    # REQUIRED (during_exercise mode). Called after each completed rep, and after
+    # 5 seconds with no rep detected.
+    # cue_data: {
+    #   "trigger": "rep" | "timeout",
+    #   "rep_number": int,
+    #   "round_number": int | None,
+    #   "frames": list[dict]   # recent pose frames
+    # }
+    # Return EXACTLY ONE short spoken sentence. Patient is still moving.
+    # "rep" trigger: coaching or encouragement based on the just-completed rep.
+    # "timeout" trigger: brief encouragement or movement reminder.
+    # Examples: "Good squat!", "Go deeper!", "Keep going!", "Lean forward more!"
+    # Do NOT return multiple sentences. Do NOT mention raw angle values.
+""")
+
+    if "after_window" in modes:
+        parts.append(f"""\
+def generate_round_feedback(round_data: dict) -> list[str]:
+    # REQUIRED (after_window mode). Called once after each {session_duration_secs}-second
+    # exercise window. Exercise pauses while feedback is spoken.
+    # round_data: {{
+    #   "round_number": int,
+    #   "rep_count": int,
+    #   "frames": list[dict],
+    #   "duration_seconds": float
+    # }}
+    # Return a list of spoken sentences. Use as many sentences as needed.
+    # - Always open with rep count + one specific positive observation.
+    # - Add corrective cues only for issues that actually occurred.
+    # - If rep_count is 0 but movement was detected: describe what happened and what to do.
+    # - Use separate if statements (NOT elif) for independent quality checks.
+    # - Give verbal coaching a physiotherapist would say aloud.
+    # - By default do NOT report raw angle values unless instructions explicitly ask.
+""")
+
+    if "after_exercise" in modes:
+        parts.append("""\
+def get_session_summary(session_data: dict) -> list[str]:
+    # REQUIRED (after_exercise mode). Called once when patient ends the session.
+    # session_data: {
+    #   "total_reps": int,
+    #   "total_duration_seconds": float,
+    #   "rounds": list[dict],
+    #   "rep_cues": list[str],              # cues spoken in during_exercise mode
+    #   "round_feedback": list[list[str]],  # round feedback spoken in after_window mode
+    #   "angle_stats": {name: {"min": float, "max": float}, ...}
+    # }
+    # Return a list of spoken sentences synthesising the full session arc.
+    # Requirements:
+    # - Reference specific reps or rounds by number where it adds clarity.
+    # - Track improvement: if depth improved from rep 1 to rep 3, say so explicitly.
+    # - Connect earlier and later feedback into one coherent narrative.
+    # - Always mention at least one thing the patient did well based on measured data.
+    # - If total_reps is 0: explain what to do differently next time.
+    # - Ignore angle_stats entries whose "min" < 10.0 — detection artefacts.
+    # - Use verbal coaching language; no raw angle values unless instructions request them.
+""")
+
+    parts.append("""\
+def get_relevant_joints() -> list:
+    # OPTIONAL. Returns [(display_label, pose_data_key), ...] for sidebar display.
+    # Return only joints listed in Display Values (1-2 if none specified).
+    # Labels max 12 chars. Keys must exist in pose_data.
+""")
+
+    return "\n".join(parts)
 
 
 _DECREASING_ANGLE_JOINTS = {
@@ -611,11 +707,21 @@ def build_prompt(exercise_name: str, camera_view: str,
                  boundary_values: str,
                  display_values: str,
                  session_duration_secs: int,
-                 reference_data: dict | None = None) -> str:
+                 reference_data: dict | None = None,
+                 feedback_mode: list | None = None) -> str:
+    modes = set(feedback_mode) if feedback_mode else {"after_window"}
     ref_section = ""
     if reference_data:
         ref_section = "\n" + _format_reference_data(reference_data) + "\n"
-    function_spec = _build_function_spec(session_duration_secs)
+    function_spec = _build_function_spec(session_duration_secs, list(modes))
+    # Include the few-shot example only for after_window mode (it demonstrates that function)
+    few_shot_section = _FEW_SHOT if "after_window" in modes else ""
+    # Boundary values label: only mention the feedback function when relevant
+    boundary_label = (
+        "Boundary values (quality targets for the feedback functions — NOT thresholds for "
+        "detect_rep. detect_rep must count any recognizable movement attempt using its own "
+        "loose anatomical thresholds, independently of these values):"
+    )
     return f"""\
 You are generating a Python movement analysis module for a physiotherapy application.
 
@@ -628,7 +734,7 @@ Client instructions (spoken to patient before and during exercise):
 Analysis instructions (what to look for and what feedback to give):
 {llm_instructions}
 
-Boundary values (quality targets for generate_round_feedback — NOT thresholds for detect_rep. detect_rep must count any recognizable movement attempt using its own loose anatomical thresholds, independently of these values):
+{boundary_label}
 {boundary_values}
 
 Display values (which values to show on screen during motion analysis):
@@ -638,7 +744,7 @@ Session duration: {session_duration_secs} seconds per exercise window
 
 Available pose data fields:
 {_POSE_DATA_DESCRIPTION}
-{_FEW_SHOT}
+{few_shot_section}
 
 Now generate the analysis module for '{exercise_name}' following the same structure as the example above.
 {ref_section}
@@ -647,7 +753,7 @@ Now generate the analysis module for '{exercise_name}' following the same struct
 Rules:
 - Only import math, statistics, collections, itertools, or functools if needed. Do NOT import os, sys, subprocess, socket, or requests.
 - Use module-level variables for state (rep phase tracking, etc.).
-- Implement get_instructions, detect_rep, reset_round, generate_round_feedback, and get_session_summary. The required functions are detect_rep, generate_round_feedback, and get_session_summary.
+- Implement exactly the functions listed in the function spec above. detect_rep is always required.
 - Feedback language: use plain verbal coaching by default. Only include numeric angle values if the physiotherapist's instructions explicitly request them.
 - All angles in pose_data are computed from x,y only (z is ignored). You may use left/right_elbow_angle, trunk_lean_angle etc. directly — they are already 2D. Prefer the pre-computed _bend_2d fields (0=straight convention) wherever available.
 - Use a CONSISTENT angle convention across all helpers: 0° = fully straight, higher = more bent/flexed. Always compute bend amount as (180° − raw_angle).
@@ -669,7 +775,8 @@ class LLMService:
                         llm_instructions: str,
                         boundary_values: str,
                         display_values: str,
-                        session_duration_secs: int) -> dict:
+                        session_duration_secs: int,
+                        feedback_mode: list | None = None) -> dict:
         """Call Claude, validate the result, store it. Returns the saved module dict."""
         reference_data = None
         ex = self.ex_svc.get(exercise_id)
@@ -688,6 +795,7 @@ class LLMService:
             display_values=display_values,
             session_duration_secs=session_duration_secs,
             reference_data=reference_data,
+            feedback_mode=feedback_mode or ["after_window"],
         )
         response_text = ""
         status = "failed"

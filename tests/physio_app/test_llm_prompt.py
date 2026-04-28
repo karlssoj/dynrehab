@@ -50,3 +50,49 @@ def test_prompt_includes_reference_data():
         reference_data=ref,
     )
     assert "REFERENCE VIDEO ANALYSIS" in prompt
+
+
+def test_during_exercise_mode_includes_generate_rep_cue():
+    prompt = build_prompt(
+        exercise_name="Squat", camera_view="side",
+        client_instructions="", llm_instructions="",
+        boundary_values="", display_values="",
+        session_duration_secs=10,
+        feedback_mode=["during_exercise"],
+    )
+    assert "generate_rep_cue" in prompt
+    assert "generate_round_feedback" not in prompt
+
+
+def test_after_window_mode_includes_generate_round_feedback():
+    prompt = build_prompt(
+        exercise_name="Squat", camera_view="side",
+        client_instructions="", llm_instructions="",
+        boundary_values="", display_values="",
+        session_duration_secs=10,
+        feedback_mode=["after_window"],
+    )
+    assert "generate_round_feedback" in prompt
+    assert "generate_rep_cue" not in prompt
+
+
+def test_after_exercise_mode_includes_get_session_summary():
+    prompt = build_prompt(
+        exercise_name="Squat", camera_view="side",
+        client_instructions="", llm_instructions="",
+        boundary_values="", display_values="",
+        session_duration_secs=10,
+        feedback_mode=["after_exercise"],
+    )
+    assert "get_session_summary" in prompt
+    assert "generate_round_feedback" not in prompt
+
+
+def test_default_mode_is_after_window():
+    prompt = build_prompt(
+        exercise_name="Squat", camera_view="side",
+        client_instructions="", llm_instructions="",
+        boundary_values="", display_values="",
+        session_duration_secs=10,
+    )
+    assert "generate_round_feedback" in prompt
