@@ -15,8 +15,8 @@ class Exercise:
     display_values: str
     session_duration_secs: int
     reference_video_path: str
-    feedback_mode: str
-    created_at: str
+    feedback_mode: str = '["after_window"]'
+    created_at: str = ""
 
 
 class ExerciseService:
