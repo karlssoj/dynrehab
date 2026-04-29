@@ -4,11 +4,26 @@ from typing import Optional
 
 COUNTDOWN_SECS = 5
 
+_CALIB_VIS_LOW = 0.2
+_CALIB_VIS_HIGH = 0.4
+_CALIB_MIN_HEIGHT = 0.75
+_CALIB_SIDE_THRESHOLD = 0.13
+_CALIB_HOLD_SECS = 1.5
+_CALIB_SPEAK_COOLDOWN = 4.0
+
+_CALIB_CRITICAL_KPS = [
+    "nose", "left_shoulder", "right_shoulder",
+    "left_hip", "right_hip",
+    "left_knee", "right_knee",
+    "left_ankle", "right_ankle",
+]
+
 
 class SessionRunner:
     def __init__(self, config: dict, module):
         self._exercise_secs: int = config.get("session_duration_secs", 60)
         self._feedback_mode: set = set(config.get("feedback_mode", ["after_window"]))
+        self._camera_view: str = config.get("camera_view", "side")
         self.rep_count = 0
         self._round_number = 0
         self._round_rep_count = 0
@@ -23,6 +38,8 @@ class SessionRunner:
         self._last_cue_time: float = 0.0
         self._rep_cues: list[str] = []
         self._round_feedback_history: list[list[str]] = []
+        self._calibration_last_speak: float = 0.0
+        self._calibration_ready_since: float = 0.0
         self._detect_rep = module.detect_rep
         self._generate_round_feedback = getattr(module, "generate_round_feedback", None)
         self._generate_rep_cue = getattr(module, "generate_rep_cue", None)
@@ -63,15 +80,19 @@ class SessionRunner:
                 return []
         return []
 
+    def start_calibration(self):
+        self._state = "calibration"
+        self._state_wall_start = time.time()
+        self._calibration_last_speak = 0.0
+        self._calibration_ready_since = 0.0
+
     def start_countdown(self):
         self._state = "countdown"
         self._state_wall_start = time.time()
         self._countdown_last = None
 
     def end_feedback(self):
-        self._state = "countdown"
-        self._state_wall_start = time.time()
-        self._countdown_last = None
+        self.start_countdown()
 
     def process_frame(self, pose_data: dict) -> dict:
         for key, val in pose_data.items():
@@ -100,6 +121,22 @@ class SessionRunner:
 
         if self._state == "instructions":
             pass
+
+        elif self._state == "calibration":
+            status, message = self._check_position(pose_data)
+            result["calibration_status"] = status
+            now = time.time()
+            if status == "ready":
+                if self._calibration_ready_since == 0.0:
+                    self._calibration_ready_since = now
+                if now - self._calibration_ready_since >= _CALIB_HOLD_SECS:
+                    result["calibration_speak"] = "Bra! Vi börjar nu."
+                    self.start_countdown()
+            else:
+                self._calibration_ready_since = 0.0
+                if message and now - self._calibration_last_speak >= _CALIB_SPEAK_COOLDOWN:
+                    result["calibration_speak"] = message
+                    self._calibration_last_speak = now
 
         elif self._state == "countdown":
             remaining = COUNTDOWN_SECS - elapsed
@@ -189,6 +226,42 @@ class SessionRunner:
             lines = ["Round complete."]
         self._round_feedback_history.append(lines)
         return lines
+
+    def _check_position(self, pose_data: dict) -> tuple[str, str | None]:
+        kpts = pose_data.get("keypoints", {})
+        visible_count = sum(
+            1 for k in _CALIB_CRITICAL_KPS
+            if kpts.get(k) and kpts[k][3] > _CALIB_VIS_LOW
+        )
+        if visible_count < 4:
+            return "no_person", "Ställ dig framför kameran så att hela din kropp syns i bild."
+        top_y = min(
+            (kpts[k][1] for k in ("nose", "left_shoulder", "right_shoulder")
+             if kpts.get(k) and kpts[k][3] > _CALIB_VIS_LOW),
+            default=None,
+        )
+        bottom_y = max(
+            (kpts[k][1] for k in ("left_ankle", "right_ankle", "left_heel", "right_heel")
+             if kpts.get(k) and kpts[k][3] > _CALIB_VIS_LOW),
+            default=None,
+        )
+        if top_y is None or bottom_y is None or (bottom_y - top_y) < _CALIB_MIN_HEIGHT:
+            return "too_far", "Kom närmare kameran."
+        if any(not kpts.get(k) or kpts[k][3] < _CALIB_VIS_HIGH for k in _CALIB_CRITICAL_KPS):
+            return "too_far", "Kom närmare kameran."
+        ls = kpts.get("left_shoulder")
+        rs = kpts.get("right_shoulder")
+        if ls and rs:
+            shoulder_sep = abs(ls[0] - rs[0])
+            if self._camera_view == "side" and shoulder_sep > _CALIB_SIDE_THRESHOLD:
+                return "wrong_orientation", "Vänd dig med sidan mot kameran."
+            if self._camera_view == "front" and shoulder_sep < _CALIB_SIDE_THRESHOLD:
+                return "wrong_orientation", "Vänd dig mot kameran."
+            if self._camera_view == "back":
+                nose = kpts.get("nose")
+                if nose and nose[3] > _CALIB_VIS_HIGH:
+                    return "wrong_orientation", "Vänd dig bort från kameran."
+        return "ready", None
 
     def get_session_summary_speech(self) -> list[str]:
         if not self._get_session_summary:

@@ -204,7 +204,7 @@ class SessionFrame(ctk.CTkFrame):
     def _start(self):
         self._relevant_joints = self._runner.get_relevant_joints()
         self._build_joint_labels()
-        self._runner.start_countdown()
+        self._runner.start_calibration()
         self._engine.subscribe(self._on_frame)
         self._engine.start(self._video_source)
 
@@ -219,7 +219,25 @@ class SessionFrame(ctk.CTkFrame):
         display = frame.copy()
         h, w = display.shape[:2]
 
-        if state == "countdown":
+        if state == "calibration":
+            overlay = display.copy()
+            cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
+            cv2.addWeighted(overlay, 0.25, display, 0.75, 0, display)
+            calib_status = result.get("calibration_status", "")
+            _STATUS_TEXT = {
+                "no_person":         "Ingen person detekterad",
+                "too_far":           "Kom narmare kameran",
+                "wrong_orientation": "Fel orientering",
+                "ready":             "Korrekt position!",
+            }
+            status_text = _STATUS_TEXT.get(calib_status, "Kalibrering...")
+            color = (0, 255, 0) if calib_status == "ready" else (0, 180, 255)
+            cv2.putText(display, "Positionering",
+                        (30, 46), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 220, 255), 2)
+            cv2.putText(display, status_text,
+                        (30, h - 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 2)
+
+        elif state == "countdown":
             overlay = display.copy()
             cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
             cv2.addWeighted(overlay, 0.5, display, 0.5, 0, display)
@@ -262,6 +280,10 @@ class SessionFrame(ctk.CTkFrame):
             bar_width = int(min(1.0, elapsed / self._exercise_secs) * w)
             cv2.rectangle(display, (0, h - 8), (bar_width, h), (0, 200, 255), -1)
 
+        calibration_speak = result.get("calibration_speak")
+        if calibration_speak:
+            self._write_message(calibration_speak, "calibration")
+
         feedback_lines = result.get("feedback_lines")
         if feedback_lines is not None:
             self._feedback_lines = list(feedback_lines)
@@ -300,6 +322,7 @@ class SessionFrame(ctk.CTkFrame):
             self._update_joint_labels(pose_frame)
 
         label_map = {
+            "calibration": ("—", "Positioning..."),
             "countdown": (str(result["round_number"] + 1), "Get ready!"),
             "exercise": (str(result["round_rep_count"]), None),
             "feedback": (

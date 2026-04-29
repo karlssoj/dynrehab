@@ -255,3 +255,102 @@ def test_during_exercise_no_timeout_cue_before_5s():
     svc._last_cue_time = time.time() - 2
     result = svc.process_frame({"left_knee_angle": 170.0, "timestamp": 0.0})
     assert result.get("rep_cue") is None
+
+
+# ── calibration state ────────────────────────────────────────────────────────
+
+def _make_kp(x, y, vis):
+    return (x, y, 0.0, vis)
+
+
+def _full_body_pose(facing="side"):
+    """Pose data with all critical keypoints visible and body spanning 80% of frame."""
+    shoulder_sep = 0.05 if facing == "side" else 0.25
+    kpts = {
+        "nose":            _make_kp(0.5, 0.05, 0.9),
+        "left_shoulder":   _make_kp(0.5 - shoulder_sep / 2, 0.20, 0.9),
+        "right_shoulder":  _make_kp(0.5 + shoulder_sep / 2, 0.20, 0.9),
+        "left_hip":        _make_kp(0.5, 0.45, 0.9),
+        "right_hip":       _make_kp(0.5, 0.45, 0.9),
+        "left_knee":       _make_kp(0.5, 0.65, 0.9),
+        "right_knee":      _make_kp(0.5, 0.65, 0.9),
+        "left_ankle":      _make_kp(0.5, 0.85, 0.9),
+        "right_ankle":     _make_kp(0.5, 0.87, 0.9),
+        "left_wrist":      _make_kp(0.4, 0.40, 0.9),
+        "right_wrist":     _make_kp(0.6, 0.40, 0.9),
+    }
+    return {"keypoints": kpts}
+
+
+def test_start_calibration_sets_state():
+    svc = SessionService(exercise_id="ex1", module_code=VALID_MODULE_CODE)
+    svc.start_calibration()
+    assert svc._state == "calibration"
+
+
+def test_calibration_no_person_detected():
+    svc = SessionService(exercise_id="ex1", module_code=VALID_MODULE_CODE)
+    svc.start_calibration()
+    result = svc.process_frame({"keypoints": {}})
+    assert result["calibration_status"] == "no_person"
+    assert "calibration_speak" in result
+
+
+def test_calibration_too_far_when_body_small():
+    svc = SessionService(exercise_id="ex1", module_code=VALID_MODULE_CODE)
+    svc.start_calibration()
+    # nose at top, ankle only 40% below — body height < 75%
+    kpts = {
+        "nose":           _make_kp(0.5, 0.20, 0.9),
+        "left_shoulder":  _make_kp(0.48, 0.30, 0.9),
+        "right_shoulder": _make_kp(0.52, 0.30, 0.9),
+        "left_hip":       _make_kp(0.5, 0.42, 0.9),
+        "right_hip":      _make_kp(0.5, 0.42, 0.9),
+        "left_knee":      _make_kp(0.5, 0.50, 0.9),
+        "right_knee":     _make_kp(0.5, 0.50, 0.9),
+        "left_ankle":     _make_kp(0.5, 0.58, 0.9),
+        "right_ankle":    _make_kp(0.5, 0.58, 0.9),
+    }
+    result = svc.process_frame({"keypoints": kpts})
+    assert result["calibration_status"] == "too_far"
+
+
+def test_calibration_wrong_orientation_for_side_view():
+    svc = SessionService(exercise_id="ex1", module_code=VALID_MODULE_CODE, camera_view="side")
+    svc.start_calibration()
+    result = svc.process_frame(_full_body_pose(facing="front"))
+    assert result["calibration_status"] == "wrong_orientation"
+    assert "sidan" in result.get("calibration_speak", "").lower()
+
+
+def test_calibration_ready_when_correctly_positioned_side():
+    svc = SessionService(exercise_id="ex1", module_code=VALID_MODULE_CODE, camera_view="side")
+    svc.start_calibration()
+    result = svc.process_frame(_full_body_pose(facing="side"))
+    assert result["calibration_status"] == "ready"
+
+
+def test_calibration_advances_to_countdown_after_hold():
+    svc = SessionService(exercise_id="ex1", module_code=VALID_MODULE_CODE, camera_view="side")
+    svc.start_calibration()
+    svc._calibration_ready_since = time.time() - 2.0  # already been ready > 1.5s
+    result = svc.process_frame(_full_body_pose(facing="side"))
+    assert result["state"] == "countdown"
+    assert result.get("calibration_speak") == "Bra! Vi börjar nu."
+
+
+def test_calibration_speak_respects_cooldown():
+    svc = SessionService(exercise_id="ex1", module_code=VALID_MODULE_CODE)
+    svc.start_calibration()
+    r1 = svc.process_frame({"keypoints": {}})
+    assert "calibration_speak" in r1
+    r2 = svc.process_frame({"keypoints": {}})
+    # second frame within cooldown window — should not emit again
+    assert "calibration_speak" not in r2
+
+
+def test_calibration_front_view_orientation():
+    svc = SessionService(exercise_id="ex1", module_code=VALID_MODULE_CODE, camera_view="front")
+    svc.start_calibration()
+    result = svc.process_frame(_full_body_pose(facing="side"))
+    assert result["calibration_status"] == "wrong_orientation"

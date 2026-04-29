@@ -104,15 +104,14 @@ class SessionViewFrame(ctk.CTkFrame):
         self._session = SessionService(exercise_id=self.exercise_id,
                                        module_code=module["code"],
                                        exercise_secs=self._exercise_secs,
-                                       feedback_mode=self._feedback_mode)
+                                       feedback_mode=self._feedback_mode,
+                                       camera_view=ex.camera_view or "side")
         instructions = self._session.get_instructions()
         if instructions:
-            # Speak all lines joined as one message so nothing gets drained by the
-            # latest-wins queue, then poll is_speaking() each frame to start countdown.
             self._tts.speak_immediate(". ".join(instructions))
             self._instructions_spoken = True
         else:
-            self._session.start_countdown()
+            self._session.start_calibration()
             self._countdown_triggered = True
         self._relevant_joints: list = self._session.get_relevant_joints()
         self._build_joint_labels()
@@ -145,11 +144,28 @@ class SessionViewFrame(ctk.CTkFrame):
             tx = (w - text_size[0]) // 2
             ty = h // 2
             cv2.putText(display, text, (tx, ty), font, 0.8, (0, 220, 255), 2)
-            # Start countdown as soon as TTS finishes — no fixed delay
             if (self._instructions_spoken and not self._countdown_triggered
                     and not self._tts.is_speaking()):
                 self._countdown_triggered = True
-                self._session.start_countdown()
+                self._session.start_calibration()
+
+        elif state == "calibration":
+            overlay = display.copy()
+            cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
+            cv2.addWeighted(overlay, 0.25, display, 0.75, 0, display)
+            calib_status = result.get("calibration_status", "")
+            _STATUS_TEXT = {
+                "no_person":         "Ingen person detekterad",
+                "too_far":           "Kom narmare kameran",
+                "wrong_orientation": "Fel orientering",
+                "ready":             "Korrekt position!",
+            }
+            status_text = _STATUS_TEXT.get(calib_status, "Kalibrering...")
+            color = (0, 255, 0) if calib_status == "ready" else (0, 180, 255)
+            cv2.putText(display, "Positionering",
+                        (30, 46), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 220, 255), 2)
+            cv2.putText(display, status_text,
+                        (30, h - 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 2)
 
         elif state == "countdown":
             overlay = display.copy()
@@ -202,6 +218,10 @@ class SessionViewFrame(ctk.CTkFrame):
             bar_width = int(min(1.0, elapsed / self._exercise_secs) * w)
             cv2.rectangle(display, (0, h - 8), (bar_width, h), (0, 200, 255), -1)
 
+        calibration_speak = result.get("calibration_speak")
+        if calibration_speak:
+            self._tts.speak(calibration_speak)
+
         # Handle countdown speech
         countdown_speak = result.get("countdown_speak")
         if countdown_speak is not None and state == "countdown":
@@ -252,6 +272,9 @@ class SessionViewFrame(ctk.CTkFrame):
         if state == "instructions":
             self.rep_label.configure(text="—")
             self.feedback_label.configure(text="Instructions...")
+        elif state == "calibration":
+            self.rep_label.configure(text="—")
+            self.feedback_label.configure(text="Positioning...")
         elif state == "countdown":
             self.rep_label.configure(text=str(result["round_number"] + 1))
             self.feedback_label.configure(text="Get ready!")
