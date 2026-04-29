@@ -473,20 +473,45 @@ def get_session_summary(session_data: dict) -> list[str]:
     # session_data: {
     #   "total_reps": int,
     #   "total_duration_seconds": float,
-    #   "rounds": list[dict],
+    #   "rounds": list[dict],               # [{round_number, rep_count, frames, duration_seconds}, ...]
     #   "rep_cues": list[str],              # cues spoken in during_exercise mode
-    #   "round_feedback": list[list[str]],  # round feedback spoken in after_window mode
-    #   "angle_stats": {name: {"min": float, "max": float}, ...}
+    #   "round_feedback": list[list[str]],  # per-round feedback spoken after each window
+    #   "angle_stats": {name: {"min": float, "max": float}, ...}  # GLOBAL — do NOT use for temporal claims
     # }
     # Return a list of spoken sentences synthesising the full session arc.
+    #
+    # *** DO NOT USE angle_stats FOR TEMPORAL/PROGRESSION CLAIMS ***
+    # angle_stats holds global min/max across the ENTIRE session. It CANNOT tell you whether
+    # performance improved, declined, or stayed consistent across rounds. Never say things like
+    # "your depth was good throughout" based on angle_stats — you cannot know that from it.
+    #
+    # *** HOW TO DETECT PROGRESSION HONESTLY ***
+    # Compute the primary angle per round from rounds[i]["frames"], then compare:
+    #   round_peaks = []
+    #   for r in session_data["rounds"]:
+    #       vals = [f.get("KEY_ANGLE", 0) for f in r["frames"] if f.get("KEY_ANGLE", 0) > 5]
+    #       round_peaks.append(max(vals) if vals else 0)
+    #   if len(round_peaks) >= 2:
+    #       if round_peaks[-1] > round_peaks[0] + 10:
+    #           lines.append("Your depth improved across the session.")
+    #       elif round_peaks[0] > round_peaks[-1] + 10:
+    #           lines.append("Your depth was better in the early rounds.")
+    #       elif all(p >= THRESHOLD for p in round_peaks):
+    #           lines.append("You maintained good depth throughout.")  # only if ALL rounds confirm it
+    #       # else: omit the temporal claim entirely
+    # Replace KEY_ANGLE with the same primary angle used in detect_rep.
+    #
+    # Use round_feedback as secondary evidence:
+    # - If an issue is raised in round_feedback[0] but absent in round_feedback[-1] → patient improved
+    # - If the same issue appears in every round's feedback → persistent problem that needs work
+    #
     # Requirements:
-    # - Reference specific reps or rounds by number where it adds clarity.
-    # - Track improvement: if depth improved from rep 1 to rep 3, say so explicitly.
-    # - Connect earlier and later feedback into one coherent narrative.
-    # - Always mention at least one thing the patient did well based on measured data.
-    # - If total_reps is 0: explain what to do differently next time.
-    # - Ignore angle_stats entries whose "min" < 10.0 — detection artefacts.
-    # - Use verbal coaching language; no raw angle values unless instructions request them.
+    # - Name specific rounds when describing change ("in round 1", "by round 2")
+    # - NEVER say "throughout" or "consistently" unless per-round data confirms every round
+    # - NEVER claim improvement unless per-round data shows a measurable increase
+    # - Always mention at least one specific positive finding from the data
+    # - If total_reps is 0: describe what to do differently next time
+    # - Use verbal coaching language; no raw angle values unless instructions request them
 """)
 
     parts.append("""\
