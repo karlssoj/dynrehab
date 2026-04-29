@@ -36,9 +36,28 @@ def test_missing_generate_round_feedback():
 
 def test_missing_get_session_summary():
     code = "def detect_rep(d): return False\ndef generate_round_feedback(d): return []"
-    result = validate_module(code)
+    result = validate_module(code, feedback_mode=["after_exercise"])
     assert result["valid"] is False
     assert "get_session_summary" in result["error"]
+
+
+def test_get_session_summary_not_required_without_after_exercise_mode():
+    code = "def detect_rep(d): return False\ndef generate_round_feedback(d): return []"
+    result = validate_module(code, feedback_mode=["after_window"])
+    assert result["valid"] is True
+
+
+def test_generate_rep_cue_required_in_during_exercise_mode():
+    code = "def detect_rep(d): return False"
+    result = validate_module(code, feedback_mode=["during_exercise"])
+    assert result["valid"] is False
+    assert "generate_rep_cue" in result["error"]
+
+
+def test_mode_only_requires_its_own_function():
+    code = "def detect_rep(d): return False\ndef generate_rep_cue(d): return 'Go!'"
+    result = validate_module(code, feedback_mode=["during_exercise"])
+    assert result["valid"] is True
 
 
 def test_banned_import_os():

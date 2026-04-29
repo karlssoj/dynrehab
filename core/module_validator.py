@@ -1,10 +1,16 @@
 import ast
 
 BANNED_IMPORTS = {"os", "subprocess", "sys", "shutil", "socket", "requests", "urllib", "http"}
-REQUIRED_FUNCTIONS = {"detect_rep", "generate_round_feedback", "get_session_summary"}
+
+_ALWAYS_REQUIRED = {"detect_rep"}
+_MODE_FUNCTIONS = {
+    "during_exercise": "generate_rep_cue",
+    "after_window": "generate_round_feedback",
+    "after_exercise": "get_session_summary",
+}
 
 
-def validate_module(code: str) -> dict:
+def validate_module(code: str, feedback_mode: list[str] | None = None) -> dict:
     """
     Validate a generated analysis module.
     Returns {"valid": bool, "error": str | None}.
@@ -29,12 +35,14 @@ def validate_module(code: str) -> dict:
                     return {"valid": False, "error": f"Banned import: '{top}'"}
 
     # 3. Check required functions are defined at module level
+    modes = set(feedback_mode) if feedback_mode else {"after_window"}
+    required = _ALWAYS_REQUIRED | {_MODE_FUNCTIONS[m] for m in modes if m in _MODE_FUNCTIONS}
     defined = {
         node.name
         for node in tree.body
         if isinstance(node, ast.FunctionDef)
     }
-    missing = REQUIRED_FUNCTIONS - defined
+    missing = required - defined
     if missing:
         return {"valid": False, "error": f"Missing required functions: {', '.join(sorted(missing))}"}
 

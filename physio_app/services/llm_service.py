@@ -701,7 +701,7 @@ class LLMService:
                     messages=[{"role": "user", "content": prompt}],
                 )
                 response_text = message.content[0].text.strip()
-                validation = validate_module(response_text)
+                validation = validate_module(response_text, feedback_mode=feedback_mode or ["after_window"])
                 if validation["valid"]:
                     status = "validated"
                     break
