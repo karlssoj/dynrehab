@@ -128,6 +128,35 @@ SIDE-VIEW SPECIFIC — knees over toes / shin forward lean:
     if avg_shin > 35:
         feedback.append("Your knees are travelling too far over your toes — shift your weight back.")
 
+SIDE-VIEW SPECIFIC — heel rise detection:
+  Heel rise cannot be read from a pre-computed field. Compute it per-frame from keypoints:
+    def _heel_rise(pose_data, side="auto"):
+        kpts = pose_data.get("keypoints", {})
+        # Pick the side with better visibility, or use the specified side.
+        if side == "auto":
+            lh = kpts.get("left_heel"); rh = kpts.get("right_heel")
+            lf = kpts.get("left_foot_index"); rf = kpts.get("right_foot_index")
+            l_vis = min(lh[3] if lh else 0, lf[3] if lf else 0)
+            r_vis = min(rh[3] if rh else 0, rf[3] if rf else 0)
+            side = "left" if l_vis >= r_vis else "right"
+        heel = kpts.get(f"{side}_heel")
+        foot_index = kpts.get(f"{side}_foot_index")
+        if not heel or not foot_index:
+            return 0.0
+        if min(heel[3], foot_index[3]) < _VIS_THRESHOLD:
+            return 0.0
+        # y increases downward. When the heel lifts, heel_y decreases relative to foot_index_y.
+        # rise > 0 means the heel is above the ball of the foot (heel has risen off the ground).
+        return foot_index[1] - heel[1]
+  Interpretation (SIDE VIEW only — unreliable from front/back view):
+    ~0.01–0.02 = flat foot (natural arch, no concern)
+    > 0.04     = noticeable heel rise (worth flagging)
+    > 0.06     = clear heel rise (definite compensatory pattern)
+  Detect during the downward phase only (e.g., while knee is bending):
+    rises = [_heel_rise(f) for f in frames if f.get("left_knee_bend_2d", 0) > 20]
+    if rises and max(rises) > 0.04:
+        feedback.append("Your heels were lifting off the ground — work on ankle mobility.")
+
 LYING / SEATED / KNEELING exercises:
   _trunk_lean_2d() ONLY works when the patient is standing upright.
   For lying, seated, or kneeling exercises it returns ~0 regardless of movement.
