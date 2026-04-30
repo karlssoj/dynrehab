@@ -141,7 +141,7 @@ class ExerciseEditorFrame(ctk.CTkFrame):
         self.status_label.pack(side="left", padx=12)
 
     def _on_mode_changed(self):
-        if self._mode_window_var.get() or self._mode_rep_var.get():
+        if self._mode_window_var.get():
             self._duration_frame.pack(fill="x", before=self._feedback_mode_label)
         else:
             self._duration_frame.pack_forget()
