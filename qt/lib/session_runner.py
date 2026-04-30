@@ -42,8 +42,11 @@ class SessionRunner:
         self._round_feedback_history: list[list[str]] = []
         self._calibration_last_speak: float = 0.0
         self._calibration_ready_since: float = 0.0
+        self._feedback_type: str = "window"  # "window" | "rep"
+        self._exercise_elapsed_at_pause: float = 0.0
         self._detect_rep = module.detect_rep
         self._generate_round_feedback = getattr(module, "generate_round_feedback", None)
+        self._generate_rep_feedback = getattr(module, "generate_rep_feedback", None)
         self._generate_rep_cue = getattr(module, "generate_rep_cue", None)
         self._get_session_summary = getattr(module, "get_session_summary", None)
         self._get_instructions = getattr(module, "get_instructions", None)
@@ -94,7 +97,12 @@ class SessionRunner:
         self._countdown_last = None
 
     def end_feedback(self):
-        self.start_countdown()
+        if self._feedback_type == "rep":
+            self._feedback_type = "window"
+            self._state = "exercise"
+            self._state_wall_start = time.time() - self._exercise_elapsed_at_pause
+        else:
+            self.start_countdown()
 
     def process_frame(self, pose_data: dict) -> dict:
         for key, val in pose_data.items():
@@ -167,6 +175,11 @@ class SessionRunner:
                         if cue:
                             result["rep_cue"] = cue
                             self._rep_cues.append(cue)
+                    if "after_rep" in self._feedback_mode:
+                        self._exercise_elapsed_at_pause = elapsed
+                        feedback = self._enter_rep_feedback()
+                        result["feedback_lines"] = feedback
+                        result["time_remaining"] = 0.0
             except Exception as e:
                 print(f"[runner] detect_rep error: {e}")
             result["round_rep_count"] = self._round_rep_count
@@ -182,7 +195,7 @@ class SessionRunner:
                     result["rep_cue"] = cue
                     self._rep_cues.append(cue)
 
-            if elapsed >= self._exercise_secs and "after_window" in self._feedback_mode:
+            if self._state == "exercise" and elapsed >= self._exercise_secs and "after_window" in self._feedback_mode:
                 feedback = self._enter_feedback()
                 result["feedback_lines"] = feedback
                 result["time_remaining"] = 0.0
@@ -227,6 +240,24 @@ class SessionRunner:
         except Exception as e:
             print(f"[runner] generate_round_feedback error: {e}")
             lines = ["Round complete."]
+        self._round_feedback_history.append(lines)
+        return lines
+
+    def _enter_rep_feedback(self) -> list[str]:
+        self._feedback_type = "rep"
+        self._state = "feedback"
+        self._state_wall_start = time.time()
+        rep_data = {
+            "rep_number": self.rep_count,
+            "round_number": self._round_number,
+            "frames": list(self._round_frames[-60:]),
+        }
+        try:
+            lines = self._generate_rep_feedback(rep_data) if self._generate_rep_feedback else None
+            lines = list(lines) if lines else ["Good rep, keep going!"]
+        except Exception as e:
+            print(f"[runner] generate_rep_feedback error: {e}")
+            lines = ["Good rep, keep going!"]
         self._round_feedback_history.append(lines)
         return lines
 

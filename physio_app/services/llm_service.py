@@ -467,6 +467,8 @@ def _build_function_spec(session_duration_secs: int, feedback_mode: list) -> str
         required.append("generate_rep_cue")
     if "after_window" in modes:
         required.append("generate_round_feedback")
+    if "after_rep" in modes:
+        required.append("generate_rep_feedback")
     if "after_exercise" in modes:
         required.append("get_session_summary")
 
@@ -555,6 +557,26 @@ def generate_round_feedback(round_data: dict) -> list[str]:
     # - Use separate if statements (NOT elif) for independent quality checks.
     # - Give verbal coaching a physiotherapist would say aloud.
     # - By default do NOT report raw angle values unless instructions explicitly ask.
+""")
+
+    if "after_rep" in modes:
+        parts.append("""\
+def generate_rep_feedback(rep_data: dict) -> list[str]:
+    # REQUIRED (after_rep mode). Called once after each completed rep.
+    # Exercise is paused while this feedback is spoken — give a full per-rep critique.
+    # rep_data: {
+    #   "rep_number": int,      # total reps completed so far (1-indexed)
+    #   "round_number": int,    # current round number
+    #   "frames": list[dict]    # recent pose frames (last ~2 seconds)
+    # }
+    # Return a list of spoken sentences. 2-4 sentences — brief but complete.
+    # - Open with a short rep acknowledgment (e.g., "Rep 3 done.").
+    # - Cover the most important quality dimension first (depth, alignment, posture).
+    # - Give a corrective cue only if an issue was clearly present in these frames.
+    # - If no issues: give brief encouragement and one positive observation.
+    # - NEVER report raw angle values unless instructions explicitly request them.
+    # - Severity order same as generate_rep_cue: injury risk > depth > posture.
+    # - Use separate if statements (NOT elif) for independent quality checks.
 """)
 
     if "after_exercise" in modes:

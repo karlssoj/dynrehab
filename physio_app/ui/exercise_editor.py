@@ -94,12 +94,16 @@ class ExerciseEditorFrame(ctk.CTkFrame):
         ctk.CTkLabel(left, text="When should feedback be given to the patient?",
                      text_color="gray", font=ctk.CTkFont(size=11)).pack(anchor="w")
         self._mode_window_var = ctk.BooleanVar(value=True)
+        self._mode_rep_var = ctk.BooleanVar(value=False)
         self._mode_during_var = ctk.BooleanVar(value=False)
         self._mode_after_var = ctk.BooleanVar(value=False)
         ctk.CTkCheckBox(left, text="After time window  (pause for feedback each round)",
                         variable=self._mode_window_var,
                         command=self._on_mode_changed).pack(anchor="w")
-        ctk.CTkCheckBox(left, text="During exercise  (short cue after each rep)",
+        ctk.CTkCheckBox(left, text="After each rep  (pause for detailed feedback per rep)",
+                        variable=self._mode_rep_var,
+                        command=self._on_mode_changed).pack(anchor="w")
+        ctk.CTkCheckBox(left, text="During exercise  (short cue after each rep, no pause)",
                         variable=self._mode_during_var).pack(anchor="w")
         ctk.CTkCheckBox(left, text="After exercise  (summary when session ends)",
                         variable=self._mode_after_var).pack(anchor="w", pady=(0, 12))
@@ -137,7 +141,7 @@ class ExerciseEditorFrame(ctk.CTkFrame):
         self.status_label.pack(side="left", padx=12)
 
     def _on_mode_changed(self):
-        if self._mode_window_var.get():
+        if self._mode_window_var.get() or self._mode_rep_var.get():
             self._duration_frame.pack(fill="x", before=self._feedback_mode_label)
         else:
             self._duration_frame.pack_forget()
@@ -159,6 +163,7 @@ class ExerciseEditorFrame(ctk.CTkFrame):
             modes = ["after_window"]
         self._mode_during_var.set("during_exercise" in modes)
         self._mode_window_var.set("after_window" in modes)
+        self._mode_rep_var.set("after_rep" in modes)
         self._mode_after_var.set("after_exercise" in modes)
         self._on_mode_changed()
         if ex.reference_video_path:
@@ -276,10 +281,12 @@ class ExerciseEditorFrame(ctk.CTkFrame):
         except (ValueError, TypeError):
             duration = 10
         modes = []
-        if self._mode_during_var.get():
-            modes.append("during_exercise")
         if self._mode_window_var.get():
             modes.append("after_window")
+        if self._mode_rep_var.get():
+            modes.append("after_rep")
+        if self._mode_during_var.get():
+            modes.append("during_exercise")
         if self._mode_after_var.get():
             modes.append("after_exercise")
         if not modes:

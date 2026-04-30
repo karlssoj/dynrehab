@@ -1,4 +1,5 @@
 import time
+import pytest
 from client_app.services.session_service import SessionService
 
 VALID_MODULE_CODE = """
@@ -439,3 +440,82 @@ def test_calibration_message_always_present_in_result():
     result = svc.process_frame(_full_body_pose(facing="front"))
     assert "calibration_message" in result
     assert result["calibration_message"] == "Turn sideways to the camera."
+
+
+# ── after_rep mode ────────────────────────────────────────────────────────────
+
+_REP_FEEDBACK_MODULE = """
+_phase = "ready"
+
+def detect_rep(pose_data):
+    global _phase
+    angle = pose_data.get("left_knee_angle", 180)
+    if _phase == "ready" and angle < 100:
+        _phase = "bent"
+    elif _phase == "bent" and angle > 160:
+        _phase = "ready"
+        return True
+    return False
+
+def generate_rep_feedback(rep_data):
+    rep_number = rep_data.get("rep_number", 1)
+    return [f"Rep {rep_number} done.", "Good depth on that one."]
+"""
+
+
+def test_after_rep_mode_pauses_exercise_after_rep():
+    svc = SessionService(exercise_id="ex1", module_code=_REP_FEEDBACK_MODULE,
+                         feedback_mode=["after_rep"])
+    svc._enter_exercise()
+    svc.process_frame({"left_knee_angle": 90.0})   # phase → bent
+    result = svc.process_frame({"left_knee_angle": 170.0})  # rep complete
+    assert svc.rep_count == 1
+    assert svc._state == "feedback"
+    assert result["feedback_lines"] is not None
+    assert len(result["feedback_lines"]) >= 1
+
+
+def test_after_rep_end_feedback_resumes_exercise_not_countdown():
+    svc = SessionService(exercise_id="ex1", module_code=_REP_FEEDBACK_MODULE,
+                         feedback_mode=["after_rep"])
+    svc._enter_exercise()
+    svc.process_frame({"left_knee_angle": 90.0})
+    svc.process_frame({"left_knee_angle": 170.0})  # rep → feedback
+    assert svc._state == "feedback"
+    svc.end_feedback()
+    assert svc._state == "exercise"  # resumes exercise, not countdown
+
+
+def test_after_rep_exercise_elapsed_preserved_across_pause():
+    svc = SessionService(exercise_id="ex1", module_code=_REP_FEEDBACK_MODULE,
+                         feedback_mode=["after_rep"], exercise_secs=30)
+    svc._enter_exercise()
+    # Simulate 5 seconds of exercise elapsed before rep
+    svc._state_wall_start -= 5
+    svc.process_frame({"left_knee_angle": 90.0})
+    svc.process_frame({"left_knee_angle": 170.0})  # rep at t=5s
+    assert svc._exercise_elapsed_at_pause == pytest.approx(5.0, abs=0.2)
+    svc.end_feedback()
+    # After resuming, elapsed should still be ~5s (not reset to 0)
+    elapsed = time.time() - svc._state_wall_start
+    assert elapsed == pytest.approx(5.0, abs=0.3)
+
+
+def test_after_rep_time_window_not_triggered_during_rep_feedback():
+    """When rep completes on the exact frame time expires, after_rep wins over after_window.
+
+    Rep detection runs before the time-window check inside process_frame, so
+    _enter_rep_feedback() sets state="feedback" first; the subsequent
+    `if self._state == "exercise"` guard then blocks _enter_feedback() from firing.
+    """
+    svc = SessionService(exercise_id="ex1", module_code=_REP_FEEDBACK_MODULE,
+                         feedback_mode=["after_rep", "after_window"], exercise_secs=5)
+    svc._enter_exercise()
+    # Phase → bent without expiring time yet
+    svc.process_frame({"left_knee_angle": 90.0})
+    # Now backdate so that the rep-completing frame also has elapsed > exercise_secs
+    svc._state_wall_start -= 6
+    svc.process_frame({"left_knee_angle": 170.0})  # rep completes + time up on same frame
+    # after_rep fires first → state="feedback", type="rep"; after_window guard prevents double-fire
+    assert svc._state == "feedback"
+    assert svc._feedback_type == "rep"

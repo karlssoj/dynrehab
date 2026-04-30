@@ -6,6 +6,7 @@ _ALWAYS_REQUIRED = {"detect_rep"}
 _MODE_FUNCTIONS = {
     "during_exercise": "generate_rep_cue",
     "after_window": "generate_round_feedback",
+    "after_rep": "generate_rep_feedback",
     "after_exercise": "get_session_summary",
 }
 
