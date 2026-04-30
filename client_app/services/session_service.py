@@ -167,6 +167,7 @@ class SessionService:
         elif self._state == "calibration":
             status, message = self._check_position(pose_data)
             result["calibration_status"] = status
+            result["calibration_message"] = message or ""
             now = time.time()
             if status == "ready":
                 if self._calibration_ready_since == 0.0:
@@ -309,14 +310,11 @@ class SessionService:
             return "too_far", "Move closer to the camera."
         else:
             return "too_far", "Move closer to the camera."
-        # All joints clearly visible — if any are weak, check direction first
-        if any(not kpts.get(k) or kpts[k][3] < _CALIB_VIS_HIGH for k in _CALIB_CRITICAL_KPS):
-            if upper_body_large:
-                return "too_close", "Step back from the camera."
-            return "too_far", "Move closer to the camera."
+        # Check orientation before demanding full visibility — shoulders are nearly always
+        # visible, and a wrong-orientation person will have naturally occluded far-side joints.
         ls = kpts.get("left_shoulder")
         rs = kpts.get("right_shoulder")
-        if ls and rs:
+        if ls and rs and min(ls[3], rs[3]) > _CALIB_VIS_LOW:
             shoulder_sep = abs(ls[0] - rs[0])
             if self._camera_view == "side" and shoulder_sep > _CALIB_SIDE_THRESHOLD:
                 return "wrong_orientation", "Turn sideways to the camera."
@@ -326,6 +324,10 @@ class SessionService:
                 nose = kpts.get("nose")
                 if nose and nose[3] > _CALIB_VIS_HIGH:
                     return "wrong_orientation", "Turn your back to the camera."
+        if any(not kpts.get(k) or kpts[k][3] < _CALIB_VIS_HIGH for k in _CALIB_CRITICAL_KPS):
+            if upper_body_large:
+                return "too_close", "Step back from the camera."
+            return "too_far", "Move closer to the camera."
         return "ready", None
 
     def get_session_summary_speech(self) -> list[str]:

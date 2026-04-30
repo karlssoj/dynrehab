@@ -154,14 +154,12 @@ class SessionViewFrame(ctk.CTkFrame):
             cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
             cv2.addWeighted(overlay, 0.25, display, 0.75, 0, display)
             calib_status = result.get("calibration_status", "")
-            _STATUS_TEXT = {
-                "no_person":         "Step in front of the camera",
-                "too_far":           "Move closer to the camera",
-                "too_close":         "Step back from the camera",
-                "wrong_orientation": "Wrong orientation",
-                "ready":             "Good position!",
+            calib_message = result.get("calibration_message", "")
+            _STATUS_FALLBACK = {
+                "no_person": "Step in front of the camera",
+                "ready":     "Good position!",
             }
-            status_text = _STATUS_TEXT.get(calib_status, "Positioning...")
+            status_text = (calib_message or _STATUS_FALLBACK.get(calib_status, "Positioning...")).rstrip(".")
             color = (0, 255, 0) if calib_status == "ready" else (0, 180, 255)
             cv2.putText(display, "Positioning",
                         (30, 46), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 220, 255), 2)

@@ -373,3 +373,38 @@ def test_calibration_too_close_when_ankles_missing_and_upper_body_large():
     result = svc.process_frame({"keypoints": kpts})
     assert result["calibration_status"] == "too_close"
     assert "back" in result.get("calibration_speak", "").lower()
+
+
+def test_calibration_wrong_orientation_detected_despite_low_visibility_joints():
+    """Orientation check fires even when far-side joints have low visibility.
+
+    When facing camera (wrong for a side exercise), far-side knee/ankle keypoints
+    can have lower MediaPipe confidence.  The fix moves the shoulder-based orientation
+    check before the full-visibility check so the correct message is emitted.
+    """
+    svc = SessionService(exercise_id="ex1", module_code=VALID_MODULE_CODE, camera_view="side")
+    svc.start_calibration()
+    # Front-facing pose: large shoulder separation, but some lower-body joints at vis=0.25
+    # (below _CALIB_VIS_HIGH=0.4 — would have incorrectly triggered "too_far" in the old code)
+    kpts = {
+        "nose":            _make_kp(0.5,  0.05, 0.9),
+        "left_shoulder":   _make_kp(0.35, 0.20, 0.9),   # shoulder_sep = 0.30 > 0.13
+        "right_shoulder":  _make_kp(0.65, 0.20, 0.9),
+        "left_hip":        _make_kp(0.45, 0.45, 0.9),
+        "right_hip":       _make_kp(0.55, 0.45, 0.9),
+        "left_knee":       _make_kp(0.45, 0.65, 0.25),  # low visibility — occluded from front
+        "right_knee":      _make_kp(0.55, 0.65, 0.9),
+        "left_ankle":      _make_kp(0.45, 0.85, 0.25),  # low visibility
+        "right_ankle":     _make_kp(0.55, 0.87, 0.9),
+    }
+    result = svc.process_frame({"keypoints": kpts})
+    assert result["calibration_status"] == "wrong_orientation"
+    assert result.get("calibration_message") == "Turn sideways to the camera."
+
+
+def test_calibration_message_always_present_in_result():
+    svc = SessionService(exercise_id="ex1", module_code=VALID_MODULE_CODE, camera_view="side")
+    svc.start_calibration()
+    result = svc.process_frame(_full_body_pose(facing="front"))
+    assert "calibration_message" in result
+    assert result["calibration_message"] == "Turn sideways to the camera."
