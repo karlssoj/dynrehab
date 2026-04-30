@@ -773,14 +773,18 @@ Rules:
 - For frontal-view exercises: do NOT use pose_data["pelvic_tilt"] — compute _pelvic_tilt_2d from keypoints instead. Do NOT use hka_alignment to detect knee valgus direction — it is unsigned and fires for both valgus and varus. Use pose_data["left_knee_valgus"] / pose_data["right_knee_valgus"] directly (positive = inward/valgus, negative = outward/varus). Do NOT attempt to detect knees-over-toes from a front view — it requires a side-view camera and shin_angle.
 - For lying, seated, or kneeling exercises: do NOT use trunk lean as the primary detection signal. Use the bend helper for the joint being exercised (_knee_bend_2d, _elbow_bend_2d, etc.). Set the 'return to straight' threshold at ~15-20° bend to account for natural resting position noise.
 - Implement get_relevant_joints() returning 1-4 (label, pose_data_key) pairs for the joints most relevant to this exercise. Use keys that exist in pose_data (e.g. "left_knee_angle", "trunk_lean_angle", "left_arm_elevation").
-- For side-view lower-body exercises (squat, lunge, deadlift, step-up, calf raise, or any
-  exercise where knee bend is the primary movement): REQUIRED — include _best_knee_bend(),
-  _depth_frames(), _avg_shin_angle(), and _heel_rise() helpers copied verbatim from the
-  LOWER-BODY SIDE-VIEW HELPERS section above. In both generate_rep_cue and
-  generate_round_feedback, ALWAYS check heel rise (threshold > 0.04) and shin angle (threshold
-  > 30°) using _depth_frames() to limit checks to the actual bent phase. NEVER compare knee
-  x-position to foot_index x-position — this is geometrically unreliable. ALWAYS use
-  left_shin_angle / right_shin_angle from pose_data — do NOT recompute from keypoints.
+- Implement ONLY the checks the physiotherapist's instructions ask for. Do NOT add extra checks
+  not mentioned in the instructions. Let the instructions drive what you detect and report.
+- When the instructions mention heel rise, heels lifting, or ankle mobility: include the
+  _heel_rise() helper copied verbatim from the LOWER-BODY SIDE-VIEW HELPERS section above, and
+  use _depth_frames() to check it only during the bent phase. Use threshold > 0.04 unless the
+  instructions specify otherwise. NEVER attempt to detect heel rise from keypoint y-positions
+  directly — use only the _heel_rise() helper.
+- When the instructions mention knees over toes, shin angle, or forward knee travel: include
+  _best_knee_bend(), _depth_frames(), and _avg_shin_angle() copied verbatim from the
+  LOWER-BODY SIDE-VIEW HELPERS section above. Use threshold > 30° unless instructions specify
+  otherwise. NEVER compare knee x-position to foot_index x-position — this is geometrically
+  unreliable. ALWAYS use left_shin_angle / right_shin_angle from pose_data.
 - Return ONLY valid Python code. No markdown fences. No explanations.
 """
 
