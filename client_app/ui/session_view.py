@@ -374,19 +374,24 @@ class SessionViewFrame(ctk.CTkFrame):
         self._feedback_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 15))
         self._feedback_panel_visible = True
 
-    def _wait_for_summary_then_home(self, _seen_speaking: bool = False, _deadline: float = 0.0):
-        if _deadline == 0.0:
-            _deadline = time.time() + 10.0
-        if time.time() >= _deadline:
-            self.app.show_launcher()
-            return
+    def _wait_for_summary_then_home(self, _seen_speaking: bool = False,
+                                     _startup_deadline: float = 0.0):
+        # _startup_deadline only enforces that TTS starts within 5s.
+        # Once we observe is_speaking() == True we wait unconditionally until it stops,
+        # so long summaries are never cut off by a fixed timeout.
+        if not _seen_speaking:
+            if _startup_deadline == 0.0:
+                _startup_deadline = time.time() + 5.0
+            if time.time() >= _startup_deadline:
+                self.app.show_launcher()
+                return
         speaking = self._tts.is_speaking()
         if speaking:
-            self.after(200, lambda: self._wait_for_summary_then_home(True, _deadline))
+            self.after(200, lambda: self._wait_for_summary_then_home(True, _startup_deadline))
         elif _seen_speaking:
             self.app.show_launcher()
         else:
-            self.after(200, lambda: self._wait_for_summary_then_home(False, _deadline))
+            self.after(200, lambda: self._wait_for_summary_then_home(False, _startup_deadline))
 
     def _end_session(self):
         self._tts.stop()
