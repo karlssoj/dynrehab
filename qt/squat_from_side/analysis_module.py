@@ -1,334 +1,315 @@
 import math
 import statistics
 
-# ── thresholds ────────────────────────────────────────────────────────────────
-_SQUAT_START       = 20    # knee_bend > this → squat begins (loose, for detection only)
-_SQUAT_PEAK        = 40    # knee_bend >= this → counts as a real rep attempt
-_SQUAT_RETURN      = 15    # knee_bend <= this → standing again
-_HYSTERESIS        = 10    # bend must drop this much from peak before "returning"
+_VIS_THRESHOLD = 0.5
 
-# Quality targets (from physiotherapist boundary values)
-_DEPTH_TARGET      = 90    # knee bend degrees for good squat depth (~90 deg)
-_DEPTH_MIN         = 60    # minimum bend to consider meaningful depth
-_TRUNK_LEAN_MIN    = 20    # minimum acceptable torso lean (degrees from vertical)
-_TRUNK_LEAN_MAX    = 45    # maximum acceptable torso lean (degrees from vertical)
-_SHIN_ANGLE_MAX    = 30    # shin angle from vertical — above this = knees too far forward
-_HEEL_RISE_THRESH  = 0.02  # y-coordinate rise of heel keypoint (normalised) suggesting heel lift
+# ── detect_rep state ──────────────────────────────────────────────────────────
+_phase = "ready"   # "ready" | "moving"
+_in_rep = False
 
-_VIS_THRESHOLD     = 0.35  # minimum MediaPipe visibility to trust a joint
+# ── threshold constants (bend convention: 0=straight, higher=more bent) ───────
+# knee_bend thresholds derived from reference data:
+#   min_bend=3, range=106 → started=3+0.30*106≈35, full=3+0.60*106≈67
+_KNEE_BEND_START   = 35.0   # knee bend to enter "moving" phase (loose)
+_KNEE_BEND_FULL    = 67.0   # knee bend for a "completed" rep attempt (loose)
+_KNEE_BEND_RETURN  = 20.0   # knee bend must fall below this to reset
 
-# ── module-level rep detection state ─────────────────────────────────────────
-_phase        = "ready"   # "ready" | "squatting" | "returning"
-_max_bend     = 0.0
-_peak_reached = False
-_rep_frames   = []
+# boundary-value targets (used only in feedback, NOT in detect_rep)
+_KNEE_BEND_TARGET  = 90.0   # ideally >90° bend at bottom (≈90° knee angle)
+_KNEE_RETURN_TARGET = 10.0  # ideally <10° bend at top
 
+_TORSO_LEAN_MIN    = 20.0
+_TORSO_LEAN_MAX    = 45.0
 
-def _pick_side(keypoints):
-    lv = keypoints.get("left_hip",  (0, 0, 0, 0))[3]
-    rv = keypoints.get("right_hip", (0, 0, 0, 0))[3]
-    return "left" if lv >= rv else "right"
+_SHIN_ANGLE_LIMIT  = 30.0   # degrees from vertical — above this = knees too far forward
+_HEEL_RISE_LIMIT   = 0.04   # unitless y-fraction
 
 
-def _joints_visible(keypoints, side):
-    for part in ("hip", "knee", "ankle"):
-        kp = keypoints.get(f"{side}_{part}")
-        if kp is None or kp[3] < _VIS_THRESHOLD:
-            return False
-    return True
+# ─────────────────────────────────────────────────────────────────────────────
+# Helper: best (largest) knee bend in a single frame
+# ─────────────────────────────────────────────────────────────────────────────
+def _best_knee_bend(pose_data: dict) -> float:
+    l = pose_data.get("left_knee_bend_2d", 0.0) or 0.0
+    r = pose_data.get("right_knee_bend_2d", 0.0) or 0.0
+    return max(l, r)
 
 
-def _angle_2d(ax, ay, bx, by, cx, cy):
-    vax, vay = ax - bx, ay - by
-    vcx, vcy = cx - bx, cy - by
-    mag = math.hypot(vax, vay) * math.hypot(vcx, vcy)
-    if mag < 1e-10:
-        return 180.0
-    return math.degrees(math.acos(max(-1.0, min(1.0, (vax * vcx + vay * vcy) / mag))))
+# ─────────────────────────────────────────────────────────────────────────────
+# Helper: frames where knee is meaningfully bent
+# ─────────────────────────────────────────────────────────────────────────────
+def _depth_frames(frames: list) -> list:
+    return [f for f in frames if _best_knee_bend(f) > 20.0]
 
 
-def _knee_bend_2d(pose_data, side):
+# ─────────────────────────────────────────────────────────────────────────────
+# Helper: average maximum shin angle across frames
+# ─────────────────────────────────────────────────────────────────────────────
+def _avg_shin_angle(frames: list) -> float:
+    vals = [max(f.get("left_shin_angle", 0.0) or 0.0,
+                f.get("right_shin_angle", 0.0) or 0.0)
+            for f in frames]
+    vals = [v for v in vals if v > 1.0]
+    return statistics.mean(vals) if vals else 0.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helper: heel rise (side-view only)
+# ─────────────────────────────────────────────────────────────────────────────
+def _heel_rise(pose_data: dict, side: str = "auto") -> float:
     kpts = pose_data.get("keypoints", {})
-    h = kpts.get(f"{side}_hip")
-    k = kpts.get(f"{side}_knee")
-    a = kpts.get(f"{side}_ankle")
-    if not (h and k and a) or min(h[3], k[3], a[3]) < _VIS_THRESHOLD:
-        return pose_data.get(f"{side}_knee_bend_2d", 0.0)
-    raw = _angle_2d(h[0], h[1], k[0], k[1], a[0], a[1])
-    return 180.0 - raw
-
-
-def _trunk_lean_2d(pose_data, side):
-    kpts = pose_data.get("keypoints", {})
-    sh = kpts.get(f"{side}_shoulder")
-    h  = kpts.get(f"{side}_hip")
-    if not (sh and h) or min(sh[3], h[3]) < _VIS_THRESHOLD:
-        return pose_data.get("trunk_lean_angle", 0.0)
-    dx = sh[0] - h[0]
-    dy = sh[1] - h[1]
-    dist = math.hypot(dx, dy)
-    if dist < 1e-10 or dy >= 0:
-        return 0.0
-    return math.degrees(math.acos(max(-1.0, min(1.0, -dy / dist))))
-
-
-def _shin_angle(pose_data, side):
-    return pose_data.get(f"{side}_shin_angle", 0.0)
-
-
-def _heel_y(pose_data, side):
-    kpts = pose_data.get("keypoints", {})
+    if side == "auto":
+        lh = kpts.get("left_heel")
+        rh = kpts.get("right_heel")
+        lf = kpts.get("left_foot_index")
+        rf = kpts.get("right_foot_index")
+        l_vis = min(lh[3] if lh else 0, lf[3] if lf else 0)
+        r_vis = min(rh[3] if rh else 0, rf[3] if rf else 0)
+        side = "left" if l_vis >= r_vis else "right"
     heel = kpts.get(f"{side}_heel")
-    if heel is None or heel[3] < _VIS_THRESHOLD:
-        return None
-    return heel[1]
+    foot_index = kpts.get(f"{side}_foot_index")
+    if not heel or not foot_index:
+        return 0.0
+    # Foot landmarks score 0.30–0.45 from side-view; don't gate on _VIS_THRESHOLD
+    if min(heel[3], foot_index[3]) < 0.30:
+        return 0.0
+    return foot_index[1] - heel[1]
 
 
-def get_instructions():
+# ─────────────────────────────────────────────────────────────────────────────
+# Helper: peak knee bend across a list of frames
+# ─────────────────────────────────────────────────────────────────────────────
+def _peak_knee_bend(frames: list) -> float:
+    vals = [_best_knee_bend(f) for f in frames]
+    return max(vals) if vals else 0.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helper: trunk lean at bottom of squat (max lean in bent frames)
+# ─────────────────────────────────────────────────────────────────────────────
+def _max_torso_lean(frames: list) -> float:
+    vals = [f.get("trunk_lean_2d", 0.0) or 0.0 for f in frames]
+    vals = [v for v in vals if v > 0.5]
+    return max(vals) if vals else 0.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Public API
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_instructions() -> list:
     return [
-        "Stand sideways to the camera so your full body is visible.",
-        "Perform controlled squats for about 10 seconds, aiming to bend your knees to 90 degrees at the bottom of each rep.",
+        "Stand sideways to the camera with your feet shoulder-width apart.",
+        "Perform slow, controlled squats aiming to reach a 90-degree knee bend at the bottom of each rep.",
     ]
 
 
-def detect_rep(pose_data):
-    global _phase, _max_bend, _peak_reached, _rep_frames
+def reset_round():
+    global _phase, _in_rep
+    _phase = "ready"
+    _in_rep = False
 
-    kpts = pose_data.get("keypoints", {})
-    side = _pick_side(kpts)
 
-    if not _joints_visible(kpts, side):
-        return False
+def detect_rep(pose_data: dict) -> bool:
+    global _phase, _in_rep
 
-    bend = _knee_bend_2d(pose_data, side)
+    bend = _best_knee_bend(pose_data)
 
     if _phase == "ready":
-        if bend > _SQUAT_START:
-            _phase        = "squatting"
-            _max_bend     = bend
-            _peak_reached = False
-            _rep_frames   = [pose_data]
+        if bend >= _KNEE_BEND_START:
+            _phase = "moving"
+        return False
 
-    elif _phase == "squatting":
-        _rep_frames.append(pose_data)
-        if bend > _max_bend:
-            _max_bend = bend
-        if not _peak_reached and bend >= _SQUAT_PEAK:
-            _peak_reached = True
-        if bend < _max_bend - _HYSTERESIS:
-            _phase = "returning"
-
-    elif _phase == "returning":
-        _rep_frames.append(pose_data)
-        if bend <= _SQUAT_RETURN:
+    if _phase == "moving":
+        if bend >= _KNEE_BEND_FULL:
+            _in_rep = True
+        if _in_rep and bend < _KNEE_BEND_RETURN:
             _phase = "ready"
-            if _peak_reached:
-                _rep_frames = []
-                return True
-            _rep_frames = []
+            _in_rep = False
+            return True
 
     return False
 
 
-def reset_round():
-    global _phase, _max_bend, _peak_reached, _rep_frames
-    _phase        = "ready"
-    _max_bend     = 0.0
-    _peak_reached = False
-    _rep_frames   = []
+def generate_rep_feedback(rep_data: dict) -> list:
+    rep_number = rep_data.get("rep_number", 1)
+    frames = rep_data.get("frames", [])
 
-
-def generate_round_feedback(round_data):
-    rep_count = round_data.get("rep_count", 0)
-    frames    = round_data.get("frames", [])
+    lines = [f"Rep {rep_number} done."]
 
     if not frames:
-        return ["I couldn't see you clearly. Make sure your full body is visible side-on to the camera."]
-
-    kpts = frames[0].get("keypoints", {})
-    side = _pick_side(kpts)
-
-    # Collect per-frame measurements
-    bend_vals   = [_knee_bend_2d(f, side) for f in frames]
-    trunk_vals  = [_trunk_lean_2d(f, side) for f in frames]
-    shin_vals   = [_shin_angle(f, side) for f in frames if _shin_angle(f, side) > 1.0]
-    heel_ys     = [_heel_y(f, side) for f in frames if _heel_y(f, side) is not None]
-
-    peak_bend   = max(bend_vals) if bend_vals else 0.0
-    bend_range  = max(bend_vals) - min(bend_vals) if bend_vals else 0.0
-    peak_trunk  = max(trunk_vals) if trunk_vals else 0.0
-    avg_trunk   = statistics.mean(trunk_vals) if trunk_vals else 0.0
-    avg_shin    = statistics.mean(shin_vals) if shin_vals else 0.0
-
-    # Heel rise: did the heel y-coordinate move upward (decrease in image y) substantially?
-    heel_rise_detected = False
-    if len(heel_ys) > 10:
-        baseline_heel = statistics.mean(heel_ys[:5])
-        min_heel_y    = min(heel_ys)
-        # In image coords y increases downward; heel rising = y decreasing
-        if baseline_heel - min_heel_y > _HEEL_RISE_THRESH:
-            heel_rise_detected = True
-
-    lines = []
-
-    # ── No movement at all ───────────────────────────────────────────────────
-    if bend_range < 8.0:
-        lines.append("No squat movement was detected this round.")
-        lines.append(
-            "Make sure you are standing sideways to the camera and bending your knees into a squat."
-        )
+        lines.append("Keep going — focus on depth and control.")
         return lines
 
-    # ── No complete reps but movement present ────────────────────────────────
-    if rep_count == 0:
-        lines.append("No complete reps were counted this round.")
-        if peak_bend < _SQUAT_PEAK:
-            lines.append(
-                f"You bent your knees partway down — try to squat deeper, "
-                "bending your knees further until your thighs are closer to horizontal."
-            )
-        else:
-            lines.append(
-                "You squatted down but didn't fully straighten back up between reps. "
-                "Stand back up tall after each squat so the rep counts."
-            )
+    bent_frames = _depth_frames(frames)
+    peak_bend = _peak_knee_bend(frames)
+
+    # ── 1. Heel rise (highest injury-risk priority) ───────────────────────────
+    if bent_frames:
+        rises = [_heel_rise(f) for f in bent_frames]
+        if rises and max(rises) > _HEEL_RISE_LIMIT:
+            lines.append("Your heels were lifting off the ground — try to keep them flat throughout the squat.")
+            return lines
+
+    # ── 2. Knees travelling too far forward ──────────────────────────────────
+    avg_shin = _avg_shin_angle(bent_frames if bent_frames else frames)
+    if avg_shin > _SHIN_ANGLE_LIMIT:
+        lines.append("Your knees are travelling too far over your toes — push your hips back as you squat down.")
+
+    # ── 3. Squat depth ───────────────────────────────────────────────────────
+    if peak_bend < _KNEE_BEND_TARGET:
+        lines.append("Try to squat a little deeper — aim for a 90-degree knee bend at the bottom.")
     else:
-        rep_word = "rep" if rep_count == 1 else "reps"
+        lines.append("Good depth — you reached a full 90-degree squat.")
 
-        # Open with rep count + one positive quality observation
-        if peak_bend >= _DEPTH_TARGET:
-            lines.append(
-                f"Good work — you completed {rep_count} {rep_word} and your squat depth was excellent, "
-                "reaching close to a 90-degree knee bend."
-            )
-        elif peak_bend >= _DEPTH_MIN:
-            lines.append(
-                f"You completed {rep_count} {rep_word}. "
-                "Your squat depth was reasonable — try to bend a little deeper to reach parallel."
-            )
-        else:
-            lines.append(
-                f"You completed {rep_count} {rep_word}, but your squat depth was quite shallow. "
-                "Aim to bend your knees until your thighs are parallel to the floor."
-            )
+    # ── 4. Torso lean ────────────────────────────────────────────────────────
+    max_lean = _max_torso_lean(bent_frames if bent_frames else frames)
+    if max_lean > _TORSO_LEAN_MAX:
+        lines.append("You leaned forward quite a bit — try to keep your chest more upright as you squat.")
+    elif max_lean < _TORSO_LEAN_MIN and max_lean > 1.0:
+        lines.append("Good upright posture — just remember a small forward lean is completely natural.")
 
-    # ── Depth coaching (independent of rep count) ────────────────────────────
-    if rep_count > 0 and peak_bend >= _DEPTH_TARGET:
-        pass  # already praised above
-    elif rep_count > 0 and peak_bend < _DEPTH_TARGET:
-        lines.append(
-            "Try to squat a little deeper — aim for your thighs to reach horizontal at the bottom."
-        )
-
-    # ── Trunk lean ───────────────────────────────────────────────────────────
-    if avg_trunk < _TRUNK_LEAN_MIN:
-        lines.append(
-            "Your torso was very upright throughout — a slight forward lean of around 20 to 45 degrees "
-            "is natural and expected during squats."
-        )
-    elif avg_trunk > _TRUNK_LEAN_MAX:
-        lines.append(
-            "You were leaning forward quite a lot during the squat — "
-            "try to keep your chest up and facing forward to avoid excessive forward lean."
-        )
-    else:
-        lines.append(
-            "Your torso lean looked good — you maintained a controlled, natural forward angle throughout."
-        )
-
-    # ── Shin / knees over toes ───────────────────────────────────────────────
-    if avg_shin > _SHIN_ANGLE_MAX:
-        lines.append(
-            "Your knees were travelling quite far forward over your toes. "
-            "Try to keep your shins more vertical by shifting your weight back through your heels."
-        )
-
-    # ── Heel rise ────────────────────────────────────────────────────────────
-    if heel_rise_detected:
-        lines.append(
-            "It looks like your heels came off the ground during the squat — "
-            "try to keep your feet flat throughout the movement to improve ankle mobility and stability."
-        )
-
-    # Ensure at least a positive comment if all checks passed and nothing extra was added
-    if rep_count > 0 and len(lines) == 1:
-        if avg_shin <= _SHIN_ANGLE_MAX:
-            lines.append(
-                "Your shin angle looked good — your knees stayed nicely over your feet without travelling too far forward."
-            )
+    if len(lines) == 1:
+        lines.append("Nice squat — keep your movement controlled and steady.")
 
     return lines
 
 
-def get_relevant_joints():
-    return [
-        ("R knee bend", "right_knee_bend_2d"),
-        ("L knee bend", "left_knee_bend_2d"),
-        ("Torso lean",  "trunk_lean_angle"),
-    ]
-
-
-def get_session_summary(session_data):
+def get_session_summary(session_data: dict) -> list:
     total_reps = session_data.get("total_reps", 0)
-    stats      = session_data.get("angle_stats", {})
+    rounds = session_data.get("rounds", [])
+    round_feedback = session_data.get("round_feedback", [])
 
-    r_bend_max = stats.get("right_knee_bend_2d", {}).get("max", 0.0)
-    l_bend_max = stats.get("left_knee_bend_2d",  {}).get("max", 0.0)
-    best_bend  = max(r_bend_max, l_bend_max)
+    lines = []
 
-    trunk_max  = stats.get("trunk_lean_angle", {}).get("max", 0.0)
-    trunk_min  = stats.get("trunk_lean_angle", {}).get("min", 0.0)
-
-    r_shin_max = stats.get("right_shin_angle", {}).get("max", 0.0)
-    l_shin_max = stats.get("left_shin_angle",  {}).get("max", 0.0)
-    best_shin  = max(r_shin_max, l_shin_max)
-
-    parts = []
-
+    # ── Zero reps edge-case ───────────────────────────────────────────────────
     if total_reps == 0:
-        parts.append("No complete squat reps were recorded this session.")
-        parts.append(
-            "Stand sideways to the camera, bend your knees into a full squat, "
-            "then straighten back up completely between each rep."
+        lines.append("No reps were completed this session.")
+        lines.append(
+            "Next time, make sure you are standing sideways to the camera and bend your knees enough "
+            "for the system to detect the movement."
         )
-        return " ".join(parts)
+        lines.append("Focus on lowering slowly until you feel a 90-degree bend in your knees.")
+        return lines
 
-    rep_word = "rep" if total_reps == 1 else "reps"
-    parts.append(f"Session complete — you performed {total_reps} {rep_word} in total.")
+    lines.append(f"Great effort today — you completed {total_reps} squat{'s' if total_reps != 1 else ''} in total.")
 
-    # Depth summary
-    if best_bend >= _DEPTH_TARGET:
-        parts.append(
-            "Your squat depth was excellent — you reached close to a 90-degree knee bend, "
-            "which is great for strengthening your legs through the full range."
-        )
-    elif best_bend >= _DEPTH_MIN:
-        parts.append(
-            "You reached a reasonable squat depth. "
-            "Work on bending your knees a little further each time — aim for thighs parallel to the floor."
-        )
-    else:
-        parts.append(
-            "Your squat depth was quite shallow throughout the session. "
-            "Focus on sitting lower into each squat to get the full benefit of the exercise."
+    # ── Per-round depth progression ──────────────────────────────────────────
+    round_peaks = []
+    for r in rounds:
+        r_frames = r.get("frames", [])
+        vals = [_best_knee_bend(f) for f in r_frames if _best_knee_bend(f) > 5]
+        round_peaks.append(max(vals) if vals else 0.0)
+
+    if len(round_peaks) >= 2:
+        first = round_peaks[0]
+        last = round_peaks[-1]
+        if last > first + 10:
+            lines.append("Your squat depth improved as the session went on — great progression.")
+        elif first > last + 10:
+            lines.append(
+                "Your depth was deeper in the earlier rounds — fatigue may have set in towards the end. "
+                "Focus on maintaining depth even when tired."
+            )
+        elif all(p >= _KNEE_BEND_TARGET for p in round_peaks):
+            lines.append("You maintained good squat depth in every round.")
+        elif all(p < _KNEE_BEND_TARGET for p in round_peaks):
+            lines.append(
+                "Your squat depth was a little shallow across the session — aim to reach a full 90-degree "
+                "knee bend on every rep."
+            )
+
+    # ── Heel rise (persistent vs improved) ───────────────────────────────────
+    heel_issue_rounds = []
+    for i, r in enumerate(rounds):
+        r_frames = r.get("frames", [])
+        bent = _depth_frames(r_frames)
+        if bent:
+            rises = [_heel_rise(f) for f in bent]
+            if rises and max(rises) > _HEEL_RISE_LIMIT:
+                heel_issue_rounds.append(i + 1)
+
+    if heel_issue_rounds:
+        if len(heel_issue_rounds) == len(rounds) and len(rounds) > 1:
+            lines.append(
+                "Heel lifting was present in every round — continued work on ankle mobility will help you "
+                "keep your heels flat throughout the squat."
+            )
+        elif len(heel_issue_rounds) == 1:
+            lines.append(
+                f"There was some heel rise in round {heel_issue_rounds[0]}, but it improved — "
+                "keep focusing on keeping those heels down."
+            )
+        else:
+            round_str = " and ".join(f"round {n}" for n in heel_issue_rounds)
+            lines.append(
+                f"Heel lifting appeared in {round_str} — ankle mobility work between sessions will help."
+            )
+
+    # ── Shin angle / knees over toes ─────────────────────────────────────────
+    shin_issue_rounds = []
+    for i, r in enumerate(rounds):
+        r_frames = r.get("frames", [])
+        bent = _depth_frames(r_frames)
+        avg_shin = _avg_shin_angle(bent if bent else r_frames)
+        if avg_shin > _SHIN_ANGLE_LIMIT:
+            shin_issue_rounds.append(i + 1)
+
+    if shin_issue_rounds:
+        if len(shin_issue_rounds) == len(rounds) and len(rounds) > 1:
+            lines.append(
+                "Your knees were consistently travelling past your toes — practise pushing your hips "
+                "further back as you lower into the squat."
+            )
+        else:
+            round_str = " and ".join(f"round {n}" for n in shin_issue_rounds)
+            lines.append(
+                f"Knees travelling too far forward was noted in {round_str} — "
+                "keep practising the hip-back cue."
+            )
+
+    # ── Torso lean ───────────────────────────────────────────────────────────
+    torso_issue_rounds = []
+    for i, r in enumerate(rounds):
+        r_frames = r.get("frames", [])
+        bent = _depth_frames(r_frames)
+        max_lean = _max_torso_lean(bent if bent else r_frames)
+        if max_lean > _TORSO_LEAN_MAX:
+            torso_issue_rounds.append(i + 1)
+
+    if torso_issue_rounds:
+        if len(torso_issue_rounds) == len(rounds) and len(rounds) > 1:
+            lines.append(
+                "You showed quite a forward lean throughout the session — focus on keeping your chest "
+                "facing forward and your torso upright as you squat."
+            )
+        else:
+            round_str = " and ".join(f"round {n}" for n in torso_issue_rounds)
+            lines.append(
+                f"Excessive forward lean appeared in {round_str} — "
+                "try to keep your chest lifted in future reps."
+            )
+
+    # ── Use round_feedback as secondary evidence for improvement signals ──────
+    if round_feedback and len(round_feedback) >= 2:
+        first_fb = " ".join(round_feedback[0]) if isinstance(round_feedback[0], list) else str(round_feedback[0])
+        last_fb = " ".join(round_feedback[-1]) if isinstance(round_feedback[-1], list) else str(round_feedback[-1])
+        heel_in_first = "heel" in first_fb.lower()
+        heel_in_last = "heel" in last_fb.lower()
+        if heel_in_first and not heel_in_last and not heel_issue_rounds:
+            lines.append("Your heel control improved noticeably by the final round — well done.")
+
+    # ── Closing encouragement ────────────────────────────────────────────────
+    if not any("great" in l.lower() or "good" in l.lower() or "well done" in l.lower() for l in lines[1:]):
+        lines.append(
+            "Overall a solid session — keep practising controlled squats and the movement will continue to improve."
         )
 
-    # Trunk lean summary
-    if _TRUNK_LEAN_MIN <= trunk_max <= _TRUNK_LEAN_MAX:
-        parts.append(
-            "Your torso lean was well controlled — you maintained a natural forward angle without hunching over."
-        )
-    elif trunk_max > _TRUNK_LEAN_MAX:
-        parts.append(
-            "You tended to lean forward quite a bit — focus on keeping your chest up "
-            "and your torso more upright during the squat."
-        )
+    return lines
 
-    # Shin angle summary
-    if best_shin > _SHIN_ANGLE_MAX and best_shin > 10.0:
-        parts.append(
-            "Try to keep your shins more vertical by sitting your hips back slightly — "
-            "this will stop your knees from drifting too far over your toes."
-        )
 
-    return " ".join(parts)
+def get_relevant_joints() -> list:
+    return [
+        ("Left Knee", "left_knee_bend_2d"),
+        ("Right Knee", "right_knee_bend_2d"),
+        ("Torso Lean", "trunk_lean_2d"),
+    ]

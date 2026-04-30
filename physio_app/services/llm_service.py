@@ -143,7 +143,11 @@ SIDE-VIEW SPECIFIC — heel rise detection:
         foot_index = kpts.get(f"{side}_foot_index")
         if not heel or not foot_index:
             return 0.0
-        if min(heel[3], foot_index[3]) < _VIS_THRESHOLD:
+        # *** IMPORTANT: use 0.30, NOT _VIS_THRESHOLD, for foot landmarks.
+        # From a side-view camera MediaPipe assigns heel/foot_index visibility of only
+        # 0.30–0.45 even when the foot is clearly visible. Using _VIS_THRESHOLD (typically
+        # 0.35–0.50) would cause this function to silently return 0.0 on almost every frame.
+        if min(heel[3], foot_index[3]) < 0.30:
             return 0.0
         # y increases downward. When the heel lifts, heel_y decreases relative to foot_index_y.
         # rise > 0 means the heel is above the ball of the foot (heel has risen off the ground).
