@@ -155,14 +155,15 @@ class SessionViewFrame(ctk.CTkFrame):
             cv2.addWeighted(overlay, 0.25, display, 0.75, 0, display)
             calib_status = result.get("calibration_status", "")
             _STATUS_TEXT = {
-                "no_person":         "Ingen person detekterad",
-                "too_far":           "Kom narmare kameran",
-                "wrong_orientation": "Fel orientering",
-                "ready":             "Korrekt position!",
+                "no_person":         "Step in front of the camera",
+                "too_far":           "Move closer to the camera",
+                "too_close":         "Step back from the camera",
+                "wrong_orientation": "Wrong orientation",
+                "ready":             "Good position!",
             }
-            status_text = _STATUS_TEXT.get(calib_status, "Kalibrering...")
+            status_text = _STATUS_TEXT.get(calib_status, "Positioning...")
             color = (0, 255, 0) if calib_status == "ready" else (0, 180, 255)
-            cv2.putText(display, "Positionering",
+            cv2.putText(display, "Positioning",
                         (30, 46), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 220, 255), 2)
             cv2.putText(display, status_text,
                         (30, h - 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 2)

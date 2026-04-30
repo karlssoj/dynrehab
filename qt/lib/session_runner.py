@@ -130,7 +130,7 @@ class SessionRunner:
                 if self._calibration_ready_since == 0.0:
                     self._calibration_ready_since = now
                 if now - self._calibration_ready_since >= _CALIB_HOLD_SECS:
-                    result["calibration_speak"] = "Bra! Vi börjar nu."
+                    result["calibration_speak"] = "Good! Starting now."
                     self.start_countdown()
             else:
                 self._calibration_ready_since = 0.0
@@ -234,33 +234,45 @@ class SessionRunner:
             if kpts.get(k) and kpts[k][3] > _CALIB_VIS_LOW
         )
         if visible_count < 4:
-            return "no_person", "Ställ dig framför kameran så att hela din kropp syns i bild."
+            return "no_person", "Step in front of the camera so your whole body is visible."
         top_y = min(
             (kpts[k][1] for k in ("nose", "left_shoulder", "right_shoulder")
              if kpts.get(k) and kpts[k][3] > _CALIB_VIS_LOW),
             default=None,
         )
-        bottom_y = max(
+        ankle_y = max(
             (kpts[k][1] for k in ("left_ankle", "right_ankle", "left_heel", "right_heel")
              if kpts.get(k) and kpts[k][3] > _CALIB_VIS_LOW),
             default=None,
         )
-        if top_y is None or bottom_y is None or (bottom_y - top_y) < _CALIB_MIN_HEIGHT:
-            return "too_far", "Kom närmare kameran."
+        hip_y = max(
+            (kpts[k][1] for k in ("left_hip", "right_hip")
+             if kpts.get(k) and kpts[k][3] > _CALIB_VIS_LOW),
+            default=None,
+        )
+        if ankle_y is not None and top_y is not None:
+            if ankle_y - top_y < _CALIB_MIN_HEIGHT:
+                return "too_far", "Move closer to the camera."
+        elif top_y is not None and hip_y is not None:
+            if hip_y - top_y > 0.50:
+                return "too_close", "Step back from the camera."
+            return "too_far", "Move closer to the camera."
+        else:
+            return "too_far", "Move closer to the camera."
         if any(not kpts.get(k) or kpts[k][3] < _CALIB_VIS_HIGH for k in _CALIB_CRITICAL_KPS):
-            return "too_far", "Kom närmare kameran."
+            return "too_far", "Move closer to the camera."
         ls = kpts.get("left_shoulder")
         rs = kpts.get("right_shoulder")
         if ls and rs:
             shoulder_sep = abs(ls[0] - rs[0])
             if self._camera_view == "side" and shoulder_sep > _CALIB_SIDE_THRESHOLD:
-                return "wrong_orientation", "Vänd dig med sidan mot kameran."
+                return "wrong_orientation", "Turn sideways to the camera."
             if self._camera_view == "front" and shoulder_sep < _CALIB_SIDE_THRESHOLD:
-                return "wrong_orientation", "Vänd dig mot kameran."
+                return "wrong_orientation", "Turn to face the camera."
             if self._camera_view == "back":
                 nose = kpts.get("nose")
                 if nose and nose[3] > _CALIB_VIS_HIGH:
-                    return "wrong_orientation", "Vänd dig bort från kameran."
+                    return "wrong_orientation", "Turn your back to the camera."
         return "ready", None
 
     def get_session_summary_speech(self) -> list[str]:

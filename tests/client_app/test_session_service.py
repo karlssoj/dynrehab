@@ -320,7 +320,7 @@ def test_calibration_wrong_orientation_for_side_view():
     svc.start_calibration()
     result = svc.process_frame(_full_body_pose(facing="front"))
     assert result["calibration_status"] == "wrong_orientation"
-    assert "sidan" in result.get("calibration_speak", "").lower()
+    assert "sideways" in result.get("calibration_speak", "").lower()
 
 
 def test_calibration_ready_when_correctly_positioned_side():
@@ -336,7 +336,7 @@ def test_calibration_advances_to_countdown_after_hold():
     svc._calibration_ready_since = time.time() - 2.0  # already been ready > 1.5s
     result = svc.process_frame(_full_body_pose(facing="side"))
     assert result["state"] == "countdown"
-    assert result.get("calibration_speak") == "Bra! Vi börjar nu."
+    assert result.get("calibration_speak") == "Good! Starting now."
 
 
 def test_calibration_speak_respects_cooldown():
@@ -354,3 +354,22 @@ def test_calibration_front_view_orientation():
     svc.start_calibration()
     result = svc.process_frame(_full_body_pose(facing="side"))
     assert result["calibration_status"] == "wrong_orientation"
+
+
+def test_calibration_too_close_when_ankles_missing_and_upper_body_large():
+    svc = SessionService(exercise_id="ex1", module_code=VALID_MODULE_CODE)
+    svc.start_calibration()
+    # Upper body spans 60% of frame (nose y=0.05, hip y=0.65) but no ankles visible
+    kpts = {
+        "nose":           _make_kp(0.5, 0.05, 0.9),
+        "left_shoulder":  _make_kp(0.48, 0.20, 0.9),
+        "right_shoulder": _make_kp(0.52, 0.20, 0.9),
+        "left_hip":       _make_kp(0.5, 0.65, 0.9),
+        "right_hip":      _make_kp(0.5, 0.65, 0.9),
+        "left_knee":      _make_kp(0.5, 0.80, 0.9),
+        "right_knee":     _make_kp(0.5, 0.80, 0.9),
+        # no ankles
+    }
+    result = svc.process_frame({"keypoints": kpts})
+    assert result["calibration_status"] == "too_close"
+    assert "back" in result.get("calibration_speak", "").lower()
