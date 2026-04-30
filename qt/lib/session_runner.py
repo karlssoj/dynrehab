@@ -6,7 +6,8 @@ COUNTDOWN_SECS = 5
 
 _CALIB_VIS_LOW = 0.2
 _CALIB_VIS_HIGH = 0.4
-_CALIB_MIN_HEIGHT = 0.75
+_CALIB_MIN_HEIGHT = 0.60
+_CALIB_TOO_CLOSE_UPPER = 0.50
 _CALIB_SIDE_THRESHOLD = 0.13
 _CALIB_HOLD_SECS = 1.5
 _CALIB_SPEAK_COOLDOWN = 4.0
@@ -250,16 +251,24 @@ class SessionRunner:
              if kpts.get(k) and kpts[k][3] > _CALIB_VIS_LOW),
             default=None,
         )
+        upper_body_large = (
+            top_y is not None and hip_y is not None
+            and hip_y - top_y > _CALIB_TOO_CLOSE_UPPER
+        )
         if ankle_y is not None and top_y is not None:
             if ankle_y - top_y < _CALIB_MIN_HEIGHT:
+                if upper_body_large:
+                    return "too_close", "Step back from the camera."
                 return "too_far", "Move closer to the camera."
         elif top_y is not None and hip_y is not None:
-            if hip_y - top_y > 0.50:
+            if upper_body_large:
                 return "too_close", "Step back from the camera."
             return "too_far", "Move closer to the camera."
         else:
             return "too_far", "Move closer to the camera."
         if any(not kpts.get(k) or kpts[k][3] < _CALIB_VIS_HIGH for k in _CALIB_CRITICAL_KPS):
+            if upper_body_large:
+                return "too_close", "Step back from the camera."
             return "too_far", "Move closer to the camera."
         ls = kpts.get("left_shoulder")
         rs = kpts.get("right_shoulder")

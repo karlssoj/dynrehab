@@ -7,10 +7,11 @@ ALLOWED_IMPORT_NAMES = {"math", "statistics", "collections", "itertools", "funct
 
 _CALIB_VIS_LOW = 0.2
 _CALIB_VIS_HIGH = 0.4
-_CALIB_MIN_HEIGHT = 0.75   # body must span this fraction of frame height
-_CALIB_SIDE_THRESHOLD = 0.13  # shoulder x-sep above this → facing camera (frontal)
-_CALIB_HOLD_SECS = 1.5        # stay in correct position this long before advancing
-_CALIB_SPEAK_COOLDOWN = 4.0   # minimum seconds between repeated voice messages
+_CALIB_MIN_HEIGHT = 0.60       # body (nose→ankle) must span ≥60% of frame height
+_CALIB_TOO_CLOSE_UPPER = 0.50  # nose→hip > this while ankles absent/low-vis → too close
+_CALIB_SIDE_THRESHOLD = 0.13   # shoulder x-sep above this → facing camera (frontal)
+_CALIB_HOLD_SECS = 1.5
+_CALIB_SPEAK_COOLDOWN = 4.0
 
 _CALIB_CRITICAL_KPS = [
     "nose", "left_shoulder", "right_shoulder",
@@ -292,17 +293,26 @@ class SessionService:
              if kpts.get(k) and kpts[k][3] > _CALIB_VIS_LOW),
             default=None,
         )
+        # Upper body large → person is too close (feet at or below frame edge)
+        upper_body_large = (
+            top_y is not None and hip_y is not None
+            and hip_y - top_y > _CALIB_TOO_CLOSE_UPPER
+        )
         if ankle_y is not None and top_y is not None:
             if ankle_y - top_y < _CALIB_MIN_HEIGHT:
+                if upper_body_large:
+                    return "too_close", "Step back from the camera."
                 return "too_far", "Move closer to the camera."
         elif top_y is not None and hip_y is not None:
-            # Ankles outside frame — if upper body alone already spans > 50% → too close
-            if hip_y - top_y > 0.50:
+            if upper_body_large:
                 return "too_close", "Step back from the camera."
             return "too_far", "Move closer to the camera."
         else:
             return "too_far", "Move closer to the camera."
+        # All joints clearly visible — if any are weak, check direction first
         if any(not kpts.get(k) or kpts[k][3] < _CALIB_VIS_HIGH for k in _CALIB_CRITICAL_KPS):
+            if upper_body_large:
+                return "too_close", "Step back from the camera."
             return "too_far", "Move closer to the camera."
         ls = kpts.get("left_shoulder")
         rs = kpts.get("right_shoulder")
