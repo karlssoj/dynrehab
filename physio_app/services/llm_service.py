@@ -157,6 +157,37 @@ SIDE-VIEW SPECIFIC — heel rise detection:
     if rises and max(rises) > 0.04:
         feedback.append("Your heels were lifting off the ground — work on ankle mobility.")
 
+LOWER-BODY SIDE-VIEW HELPERS — copy these verbatim for squat, lunge, deadlift, step-up, calf raise:
+  These three helpers work together. _depth_frames() filters to frames where the knee is
+  meaningfully bent so heel rise and shin checks are only evaluated during the actual movement,
+  not while the patient is standing still.
+
+  def _best_knee_bend(pose_data: dict) -> float:
+      l = pose_data.get("left_knee_bend_2d", 0.0) or 0.0
+      r = pose_data.get("right_knee_bend_2d", 0.0) or 0.0
+      return max(l, r)
+
+  def _depth_frames(frames: list) -> list:
+      return [f for f in frames if _best_knee_bend(f) > 20.0]
+
+  def _avg_shin_angle(frames: list) -> float:
+      vals = [max(f.get("left_shin_angle", 0.0) or 0.0, f.get("right_shin_angle", 0.0) or 0.0)
+              for f in frames]
+      vals = [v for v in vals if v > 1.0]
+      return statistics.mean(vals) if vals else 0.0
+
+  Usage pattern in generate_rep_cue (copy this for the knees-over-toes + heel-rise checks):
+    bent_frames = _depth_frames(frames)
+    # 1. Highest priority: heel rise
+    if bent_frames:
+        rises = [_heel_rise(f) for f in bent_frames]
+        if rises and max(rises) > 0.04:
+            return "Keep your heels flat on the floor as you squat down."
+    # 2. Next: knees too far forward
+    avg_shin = _avg_shin_angle(bent_frames if bent_frames else frames)
+    if avg_shin > 30:
+        return "Push your hips back — your knees are travelling too far over your toes."
+
 LYING / SEATED / KNEELING exercises:
   _trunk_lean_2d() ONLY works when the patient is standing upright.
   For lying, seated, or kneeling exercises it returns ~0 regardless of movement.
@@ -742,6 +773,14 @@ Rules:
 - For frontal-view exercises: do NOT use pose_data["pelvic_tilt"] — compute _pelvic_tilt_2d from keypoints instead. Do NOT use hka_alignment to detect knee valgus direction — it is unsigned and fires for both valgus and varus. Use pose_data["left_knee_valgus"] / pose_data["right_knee_valgus"] directly (positive = inward/valgus, negative = outward/varus). Do NOT attempt to detect knees-over-toes from a front view — it requires a side-view camera and shin_angle.
 - For lying, seated, or kneeling exercises: do NOT use trunk lean as the primary detection signal. Use the bend helper for the joint being exercised (_knee_bend_2d, _elbow_bend_2d, etc.). Set the 'return to straight' threshold at ~15-20° bend to account for natural resting position noise.
 - Implement get_relevant_joints() returning 1-4 (label, pose_data_key) pairs for the joints most relevant to this exercise. Use keys that exist in pose_data (e.g. "left_knee_angle", "trunk_lean_angle", "left_arm_elevation").
+- For side-view lower-body exercises (squat, lunge, deadlift, step-up, calf raise, or any
+  exercise where knee bend is the primary movement): REQUIRED — include _best_knee_bend(),
+  _depth_frames(), _avg_shin_angle(), and _heel_rise() helpers copied verbatim from the
+  LOWER-BODY SIDE-VIEW HELPERS section above. In both generate_rep_cue and
+  generate_round_feedback, ALWAYS check heel rise (threshold > 0.04) and shin angle (threshold
+  > 30°) using _depth_frames() to limit checks to the actual bent phase. NEVER compare knee
+  x-position to foot_index x-position — this is geometrically unreliable. ALWAYS use
+  left_shin_angle / right_shin_angle from pose_data — do NOT recompute from keypoints.
 - Return ONLY valid Python code. No markdown fences. No explanations.
 """
 
