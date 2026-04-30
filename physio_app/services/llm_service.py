@@ -518,7 +518,9 @@ def generate_round_feedback(round_data: dict) -> list[str]:
     #   not just the most severe. The patient has stopped moving and can absorb
     #   a full critique. Use a separate if statement per independent check.
     # - Add corrective cues only for issues that actually occurred.
-    # - If rep_count is 0 but movement was detected: describe what happened and what to do.
+    # - If rep_count is 0: NEVER give positive form feedback — you have no completed rep
+    #   to evaluate. Open with "No reps were completed this round." If movement was
+    #   detected (frames non-empty), describe what was missing (e.g. didn't reach depth).
     # - Use separate if statements (NOT elif) for independent quality checks.
     # - Give verbal coaching a physiotherapist would say aloud.
     # - By default do NOT report raw angle values unless instructions explicitly ask.
@@ -568,7 +570,10 @@ def get_session_summary(session_data: dict) -> list[str]:
     # - NEVER say "throughout" or "consistently" unless per-round data confirms every round
     # - NEVER claim improvement unless per-round data shows a measurable increase
     # - Always mention at least one specific positive finding from the data
-    # - If total_reps is 0: describe what to do differently next time
+    # - CRITICAL — zero reps: if total_reps == 0, you have NO movement data to comment
+    #   positively on. NEVER say form was good, depth was fine, or anything praising
+    #   technique. Always open with "No reps were completed this session." then give
+    #   specific, actionable guidance for what to do differently next time.
     # - Use verbal coaching language; no raw angle values unless instructions request them
 """)
 

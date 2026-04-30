@@ -264,20 +264,27 @@ def _make_kp(x, y, vis):
 
 
 def _full_body_pose(facing="side"):
-    """Pose data with all critical keypoints visible and body spanning 80% of frame."""
+    """Pose data with body spanning 80% of frame and realistic keypoint visibility.
+
+    facing="side":  right side towards camera — right joints high-vis (0.9),
+                    left (far) joints low-vis (0.35), giving dom/weak ratio ~2.6 > 1.8.
+    facing="front": both sides equally visible (0.9) — ratio ~1.0, clearly not profile.
+    """
     shoulder_sep = 0.05 if facing == "side" else 0.25
+    l_vis = 0.35 if facing == "side" else 0.9   # left = far side when right side faces camera
+    r_vis = 0.9
     kpts = {
-        "nose":            _make_kp(0.5, 0.05, 0.9),
-        "left_shoulder":   _make_kp(0.5 - shoulder_sep / 2, 0.20, 0.9),
-        "right_shoulder":  _make_kp(0.5 + shoulder_sep / 2, 0.20, 0.9),
-        "left_hip":        _make_kp(0.5, 0.45, 0.9),
-        "right_hip":       _make_kp(0.5, 0.45, 0.9),
-        "left_knee":       _make_kp(0.5, 0.65, 0.9),
-        "right_knee":      _make_kp(0.5, 0.65, 0.9),
-        "left_ankle":      _make_kp(0.5, 0.85, 0.9),
-        "right_ankle":     _make_kp(0.5, 0.87, 0.9),
-        "left_wrist":      _make_kp(0.4, 0.40, 0.9),
-        "right_wrist":     _make_kp(0.6, 0.40, 0.9),
+        "nose":            _make_kp(0.5,  0.05, 0.9),
+        "left_shoulder":   _make_kp(0.5 - shoulder_sep / 2, 0.20, l_vis),
+        "right_shoulder":  _make_kp(0.5 + shoulder_sep / 2, 0.20, r_vis),
+        "left_hip":        _make_kp(0.5,  0.45, l_vis),
+        "right_hip":       _make_kp(0.5,  0.45, r_vis),
+        "left_knee":       _make_kp(0.5,  0.65, l_vis),
+        "right_knee":      _make_kp(0.5,  0.65, r_vis),
+        "left_ankle":      _make_kp(0.5,  0.85, l_vis),
+        "right_ankle":     _make_kp(0.5,  0.87, r_vis),
+        "left_wrist":      _make_kp(0.4,  0.40, l_vis),
+        "right_wrist":     _make_kp(0.6,  0.40, r_vis),
     }
     return {"keypoints": kpts}
 
@@ -375,31 +382,56 @@ def test_calibration_too_close_when_ankles_missing_and_upper_body_large():
     assert "back" in result.get("calibration_speak", "").lower()
 
 
-def test_calibration_wrong_orientation_detected_despite_low_visibility_joints():
-    """Orientation check fires even when far-side joints have low visibility.
+def test_calibration_wrong_orientation_frontal_near_symmetric_visibility():
+    """Front-facing person is detected as wrong orientation for a side-view exercise.
 
-    When facing camera (wrong for a side exercise), far-side knee/ankle keypoints
-    can have lower MediaPipe confidence.  The fix moves the shoulder-based orientation
-    check before the full-visibility check so the correct message is emitted.
+    Uses visibility-asymmetry detection: both sides have similar confidence when
+    front-facing (ratio ~1.1), so is_profile=False → wrong_orientation for side exercises.
+    Even if some lower-body joints are slightly less confident, the left/right average
+    visibility remains close to symmetric.
     """
     svc = SessionService(exercise_id="ex1", module_code=VALID_MODULE_CODE, camera_view="side")
     svc.start_calibration()
-    # Front-facing pose: large shoulder separation, but some lower-body joints at vis=0.25
-    # (below _CALIB_VIS_HIGH=0.4 — would have incorrectly triggered "too_far" in the old code)
+    # Front-facing: both sides similar visibility — avg_l ≈ avg_r → not profile
     kpts = {
         "nose":            _make_kp(0.5,  0.05, 0.9),
-        "left_shoulder":   _make_kp(0.35, 0.20, 0.9),   # shoulder_sep = 0.30 > 0.13
-        "right_shoulder":  _make_kp(0.65, 0.20, 0.9),
-        "left_hip":        _make_kp(0.45, 0.45, 0.9),
-        "right_hip":       _make_kp(0.55, 0.45, 0.9),
-        "left_knee":       _make_kp(0.45, 0.65, 0.25),  # low visibility — occluded from front
-        "right_knee":      _make_kp(0.55, 0.65, 0.9),
-        "left_ankle":      _make_kp(0.45, 0.85, 0.25),  # low visibility
-        "right_ankle":     _make_kp(0.55, 0.87, 0.9),
+        "left_shoulder":   _make_kp(0.35, 0.20, 0.85),
+        "right_shoulder":  _make_kp(0.65, 0.20, 0.85),
+        "left_hip":        _make_kp(0.45, 0.45, 0.80),
+        "right_hip":       _make_kp(0.55, 0.45, 0.80),
+        "left_knee":       _make_kp(0.45, 0.65, 0.75),
+        "right_knee":      _make_kp(0.55, 0.65, 0.75),
+        "left_ankle":      _make_kp(0.45, 0.85, 0.70),
+        "right_ankle":     _make_kp(0.55, 0.87, 0.70),
     }
     result = svc.process_frame({"keypoints": kpts})
     assert result["calibration_status"] == "wrong_orientation"
     assert result.get("calibration_message") == "Turn sideways to the camera."
+
+
+def test_calibration_profile_detected_via_visibility_asymmetry():
+    """Correctly sideways person is NOT flagged as wrong orientation.
+
+    When standing in profile, far-side joints have ~0.35 visibility and near-side ~0.9,
+    giving dom/weak ≈ 2.6 which exceeds _CALIB_PROFILE_RATIO (1.8) → is_profile=True.
+    """
+    svc = SessionService(exercise_id="ex1", module_code=VALID_MODULE_CODE, camera_view="side")
+    svc.start_calibration()
+    # Sideways: right side (near) high-vis, left side (far) low-vis
+    kpts = {
+        "nose":            _make_kp(0.5,  0.05, 0.9),
+        "left_shoulder":   _make_kp(0.5,  0.20, 0.35),  # far side
+        "right_shoulder":  _make_kp(0.5,  0.20, 0.90),  # near side
+        "left_hip":        _make_kp(0.5,  0.45, 0.35),
+        "right_hip":       _make_kp(0.5,  0.45, 0.90),
+        "left_knee":       _make_kp(0.5,  0.65, 0.35),
+        "right_knee":      _make_kp(0.5,  0.65, 0.90),
+        "left_ankle":      _make_kp(0.5,  0.85, 0.35),
+        "right_ankle":     _make_kp(0.5,  0.87, 0.90),
+    }
+    result = svc.process_frame({"keypoints": kpts})
+    # Should be "ready", not "wrong_orientation" or "too_far"
+    assert result["calibration_status"] == "ready"
 
 
 def test_calibration_message_always_present_in_result():

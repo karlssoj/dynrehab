@@ -9,7 +9,8 @@ _CALIB_VIS_LOW = 0.2
 _CALIB_VIS_HIGH = 0.4
 _CALIB_MIN_HEIGHT = 0.60       # body (nose→ankle) must span ≥60% of frame height
 _CALIB_TOO_CLOSE_UPPER = 0.50  # nose→hip > this while ankles absent/low-vis → too close
-_CALIB_SIDE_THRESHOLD = 0.13   # shoulder x-sep above this → facing camera (frontal)
+_CALIB_PROFILE_RATIO = 1.8     # dom/weak side visibility ratio above which person is in profile
+_CALIB_MIN_HIGH_VIS_KPS = 5    # at least this many of 9 critical KPs must be clearly visible
 _CALIB_HOLD_SECS = 1.5
 _CALIB_SPEAK_COOLDOWN = 4.0
 
@@ -294,7 +295,6 @@ class SessionService:
              if kpts.get(k) and kpts[k][3] > _CALIB_VIS_LOW),
             default=None,
         )
-        # Upper body large → person is too close (feet at or below frame edge)
         upper_body_large = (
             top_y is not None and hip_y is not None
             and hip_y - top_y > _CALIB_TOO_CLOSE_UPPER
@@ -310,21 +310,39 @@ class SessionService:
             return "too_far", "Move closer to the camera."
         else:
             return "too_far", "Move closer to the camera."
-        # Check orientation before demanding full visibility — shoulders are nearly always
-        # visible, and a wrong-orientation person will have naturally occluded far-side joints.
-        ls = kpts.get("left_shoulder")
-        rs = kpts.get("right_shoulder")
-        if ls and rs and min(ls[3], rs[3]) > _CALIB_VIS_LOW:
-            shoulder_sep = abs(ls[0] - rs[0])
-            if self._camera_view == "side" and shoulder_sep > _CALIB_SIDE_THRESHOLD:
-                return "wrong_orientation", "Turn sideways to the camera."
-            if self._camera_view == "front" and shoulder_sep < _CALIB_SIDE_THRESHOLD:
-                return "wrong_orientation", "Turn to face the camera."
-            if self._camera_view == "back":
-                nose = kpts.get("nose")
-                if nose and nose[3] > _CALIB_VIS_HIGH:
-                    return "wrong_orientation", "Turn your back to the camera."
-        if any(not kpts.get(k) or kpts[k][3] < _CALIB_VIS_HIGH for k in _CALIB_CRITICAL_KPS):
+
+        # Orientation check via left/right visibility asymmetry.
+        # Shoulder x-separation is unreliable at typical calibration distances on 16:9
+        # cameras (front-facing shoulder gap is only ~0.08–0.11 in normalised coords).
+        # When standing in profile, the near-side joints have much higher MediaPipe
+        # confidence than the occluded far-side joints — ratio ≥ _CALIB_PROFILE_RATIO.
+        _side_joints = ["left_shoulder", "left_hip", "left_knee", "left_ankle"]
+        _side_joints_r = ["right_shoulder", "right_hip", "right_knee", "right_ankle"]
+        l_vis = [kpts[k][3] for k in _side_joints if kpts.get(k)]
+        r_vis = [kpts[k][3] for k in _side_joints_r if kpts.get(k)]
+        avg_l = sum(l_vis) / len(l_vis) if l_vis else 0.0
+        avg_r = sum(r_vis) / len(r_vis) if r_vis else 0.0
+        dom = max(avg_l, avg_r)
+        weak = min(avg_l, avg_r)
+        is_profile = (dom > 0.3 and weak < 0.05) or (weak > 0 and dom / weak >= _CALIB_PROFILE_RATIO)
+
+        if self._camera_view == "side" and not is_profile:
+            return "wrong_orientation", "Turn sideways to the camera."
+        if self._camera_view == "front" and is_profile:
+            return "wrong_orientation", "Turn to face the camera."
+        if self._camera_view == "back":
+            nose = kpts.get("nose")
+            if nose and nose[3] > _CALIB_VIS_HIGH:
+                return "wrong_orientation", "Turn your back to the camera."
+
+        # Require at least _CALIB_MIN_HIGH_VIS_KPS of the 9 critical KPs to be
+        # clearly visible. Up to 4 occluded far-side joints are allowed so that a
+        # correctly-positioned profile does not get a spurious "move closer" message.
+        high_vis_count = sum(
+            1 for k in _CALIB_CRITICAL_KPS
+            if kpts.get(k) and kpts[k][3] >= _CALIB_VIS_HIGH
+        )
+        if high_vis_count < _CALIB_MIN_HIGH_VIS_KPS:
             if upper_body_large:
                 return "too_close", "Step back from the camera."
             return "too_far", "Move closer to the camera."

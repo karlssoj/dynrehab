@@ -8,7 +8,8 @@ _CALIB_VIS_LOW = 0.2
 _CALIB_VIS_HIGH = 0.4
 _CALIB_MIN_HEIGHT = 0.60
 _CALIB_TOO_CLOSE_UPPER = 0.50
-_CALIB_SIDE_THRESHOLD = 0.13
+_CALIB_PROFILE_RATIO = 1.8
+_CALIB_MIN_HIGH_VIS_KPS = 5
 _CALIB_HOLD_SECS = 1.5
 _CALIB_SPEAK_COOLDOWN = 4.0
 
@@ -267,19 +268,31 @@ class SessionRunner:
             return "too_far", "Move closer to the camera."
         else:
             return "too_far", "Move closer to the camera."
-        ls = kpts.get("left_shoulder")
-        rs = kpts.get("right_shoulder")
-        if ls and rs and min(ls[3], rs[3]) > _CALIB_VIS_LOW:
-            shoulder_sep = abs(ls[0] - rs[0])
-            if self._camera_view == "side" and shoulder_sep > _CALIB_SIDE_THRESHOLD:
-                return "wrong_orientation", "Turn sideways to the camera."
-            if self._camera_view == "front" and shoulder_sep < _CALIB_SIDE_THRESHOLD:
-                return "wrong_orientation", "Turn to face the camera."
-            if self._camera_view == "back":
-                nose = kpts.get("nose")
-                if nose and nose[3] > _CALIB_VIS_HIGH:
-                    return "wrong_orientation", "Turn your back to the camera."
-        if any(not kpts.get(k) or kpts[k][3] < _CALIB_VIS_HIGH for k in _CALIB_CRITICAL_KPS):
+
+        _side_joints = ["left_shoulder", "left_hip", "left_knee", "left_ankle"]
+        _side_joints_r = ["right_shoulder", "right_hip", "right_knee", "right_ankle"]
+        l_vis = [kpts[k][3] for k in _side_joints if kpts.get(k)]
+        r_vis = [kpts[k][3] for k in _side_joints_r if kpts.get(k)]
+        avg_l = sum(l_vis) / len(l_vis) if l_vis else 0.0
+        avg_r = sum(r_vis) / len(r_vis) if r_vis else 0.0
+        dom = max(avg_l, avg_r)
+        weak = min(avg_l, avg_r)
+        is_profile = (dom > 0.3 and weak < 0.05) or (weak > 0 and dom / weak >= _CALIB_PROFILE_RATIO)
+
+        if self._camera_view == "side" and not is_profile:
+            return "wrong_orientation", "Turn sideways to the camera."
+        if self._camera_view == "front" and is_profile:
+            return "wrong_orientation", "Turn to face the camera."
+        if self._camera_view == "back":
+            nose = kpts.get("nose")
+            if nose and nose[3] > _CALIB_VIS_HIGH:
+                return "wrong_orientation", "Turn your back to the camera."
+
+        high_vis_count = sum(
+            1 for k in _CALIB_CRITICAL_KPS
+            if kpts.get(k) and kpts[k][3] >= _CALIB_VIS_HIGH
+        )
+        if high_vis_count < _CALIB_MIN_HIGH_VIS_KPS:
             if upper_body_large:
                 return "too_close", "Step back from the camera."
             return "too_far", "Move closer to the camera."
