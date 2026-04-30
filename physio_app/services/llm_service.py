@@ -143,22 +143,24 @@ SIDE-VIEW SPECIFIC — heel rise detection:
         foot_index = kpts.get(f"{side}_foot_index")
         if not heel or not foot_index:
             return 0.0
-        # *** IMPORTANT: use 0.30, NOT _VIS_THRESHOLD, for foot landmarks.
+        # *** IMPORTANT: use 0.20, NOT _VIS_THRESHOLD, for foot landmarks.
         # From a side-view camera MediaPipe assigns heel/foot_index visibility of only
-        # 0.30–0.45 even when the foot is clearly visible. Using _VIS_THRESHOLD (typically
-        # 0.35–0.50) would cause this function to silently return 0.0 on almost every frame.
-        if min(heel[3], foot_index[3]) < 0.30:
+        # 0.20–0.45 even when the foot is clearly visible. Using _VIS_THRESHOLD (typically
+        # 0.35–0.50) causes this function to silently return 0.0 on almost every frame.
+        if min(heel[3], foot_index[3]) < 0.20:
             return 0.0
         # y increases downward. When the heel lifts, heel_y decreases relative to foot_index_y.
         # rise > 0 means the heel is above the ball of the foot (heel has risen off the ground).
         return foot_index[1] - heel[1]
   Interpretation (SIDE VIEW only — unreliable from front/back view):
-    ~0.01–0.02 = flat foot (natural arch, no concern)
-    > 0.04     = noticeable heel rise (worth flagging)
-    > 0.06     = clear heel rise (definite compensatory pattern)
+    The values are small because both landmarks are near the bottom of the frame:
+    ~0.00–0.01 = flat foot
+    > 0.02     = noticeable heel rise (~5 cm off the ground) — USE THIS as the detection threshold
+    > 0.03     = clear heel rise (~7–8 cm)
+    *** NEVER use 0.04 or higher — that requires ~10 cm of heel lift which is extreme. ***
   Detect during the downward phase only (e.g., while knee is bending):
     rises = [_heel_rise(f) for f in frames if f.get("left_knee_bend_2d", 0) > 20]
-    if rises and max(rises) > 0.04:
+    if rises and max(rises) > 0.02:   # 0.02 ≈ 5 cm heel rise — DO NOT raise this
         feedback.append("Your heels were lifting off the ground — work on ankle mobility.")
 
 LOWER-BODY SIDE-VIEW HELPERS — copy these verbatim for squat, lunge, deadlift, step-up, calf raise:
@@ -185,7 +187,7 @@ LOWER-BODY SIDE-VIEW HELPERS — copy these verbatim for squat, lunge, deadlift,
     # 1. Highest priority: heel rise
     if bent_frames:
         rises = [_heel_rise(f) for f in bent_frames]
-        if rises and max(rises) > 0.04:
+        if rises and max(rises) > 0.02:   # 0.02 ≈ 5 cm — do not raise threshold
             return "Keep your heels flat on the floor as you squat down."
     # 2. Next: knees too far forward
     avg_shin = _avg_shin_angle(bent_frames if bent_frames else frames)
