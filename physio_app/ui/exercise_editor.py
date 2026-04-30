@@ -83,11 +83,14 @@ class ExerciseEditorFrame(ctk.CTkFrame):
         self.display_values_text = ctk.CTkTextbox(left, height=80)
         self.display_values_text.pack(fill="x", pady=(0, 12))
 
-        ctk.CTkLabel(left, text="Session Duration (seconds)").pack(anchor="w")
-        self.session_duration_entry = ctk.CTkEntry(left, placeholder_text="10")
+        self._duration_frame = ctk.CTkFrame(left, fg_color="transparent")
+        self._duration_frame.pack(fill="x")
+        ctk.CTkLabel(self._duration_frame, text="Session Duration (seconds)").pack(anchor="w")
+        self.session_duration_entry = ctk.CTkEntry(self._duration_frame, placeholder_text="10")
         self.session_duration_entry.pack(fill="x", pady=(0, 12))
 
-        ctk.CTkLabel(left, text="Feedback Mode").pack(anchor="w")
+        self._feedback_mode_label = ctk.CTkLabel(left, text="Feedback Mode")
+        self._feedback_mode_label.pack(anchor="w")
         ctk.CTkLabel(left, text="When should feedback be given to the patient?",
                      text_color="gray", font=ctk.CTkFont(size=11)).pack(anchor="w")
         self._mode_window_var = ctk.BooleanVar(value=True)
@@ -134,8 +137,10 @@ class ExerciseEditorFrame(ctk.CTkFrame):
         self.status_label.pack(side="left", padx=12)
 
     def _on_mode_changed(self):
-        state = "normal" if self._mode_window_var.get() else "disabled"
-        self.session_duration_entry.configure(state=state)
+        if self._mode_window_var.get():
+            self._duration_frame.pack(fill="x", before=self._feedback_mode_label)
+        else:
+            self._duration_frame.pack_forget()
 
     def _load(self, exercise_id: str):
         ex = self.ex_svc.get(exercise_id)
