@@ -488,8 +488,11 @@ def get_instructions() -> list[str]:
 def detect_rep(pose_data: dict) -> bool:
     # REQUIRED. Called every frame during exercise.
     # Return True exactly once per completed rep attempt.
-    # Use LOOSE anatomical thresholds — count any recognisable attempt.
-    # Use a phase state machine: ready → moving → ready.
+    # Use ONLY a two-phase state machine: ready → moving → ready.
+    # Do NOT add a third "peak" phase requiring a minimum depth or range —
+    # that blocks shallow attempts from ever being counted. Any attempt that
+    # moves past the start threshold and returns to near-start IS a rep.
+    # Depth adequacy and form quality are checked in feedback functions only.
     # Use module-level variables. reset_round() resets them.
 
 def reset_round():
