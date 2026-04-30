@@ -469,10 +469,36 @@ def generate_rep_cue(cue_data: dict) -> str:
     #   "frames": list[dict]   # recent pose frames
     # }
     # Return EXACTLY ONE short spoken sentence. Patient is still moving.
-    # "rep" trigger: coaching or encouragement based on the just-completed rep.
-    # "timeout" trigger: brief encouragement or movement reminder.
-    # Examples: "Good squat!", "Go deeper!", "Keep going!", "Lean forward more!"
+    #
+    # "rep" trigger — PRIORITY RULE: check all issues, then speak only the MOST
+    # clinically important one (highest injury risk). Never list multiple issues
+    # in a single cue — the patient is mid-exercise and cannot act on more than
+    # one correction at a time.
+    #
+    # Severity ranking principle (apply to the specific exercise at hand):
+    #   1. Joint-loading / injury-risk errors (e.g., knees tracking far over toes,
+    #      heel rise, valgus collapse, hyperextension) — speak these first.
+    #   2. Depth / range-of-motion errors (e.g., not squatting deep enough,
+    #      insufficient elbow bend) — speak if no higher-priority issue present.
+    #   3. Posture / alignment secondary notes (e.g., mild trunk lean, slight
+    #      shoulder shrug) — speak only if everything above is acceptable.
+    #   4. No issues detected → give brief encouragement or a positive cue.
+    #
+    # Implementation pattern:
+    #   frames = cue_data.get("frames", [])
+    #   if frames:
+    #       if <highest-severity check fails>:
+    #           return "<injury-risk correction>"
+    #       if <depth check fails>:
+    #           return "<depth correction>"
+    #       if <posture check fails>:
+    #           return "<posture cue>"
+    #   return "Good rep!"   # all checks passed
+    #
+    # "timeout" trigger: brief encouragement or movement reminder (no severity ranking needed).
+    # Examples: "Good squat!", "Go deeper!", "Keep going!", "Lean forward more!", "Heels down!"
     # Do NOT return multiple sentences. Do NOT mention raw angle values.
+    # Do NOT save all-issue coverage for this function — that belongs in generate_round_feedback.
 """)
 
     if "after_window" in modes:
@@ -488,6 +514,9 @@ def generate_round_feedback(round_data: dict) -> list[str]:
     # }}
     # Return a list of spoken sentences. Use as many sentences as needed.
     # - Always open with rep count + one specific positive observation.
+    # - Cover ALL quality dimensions (depth, alignment, posture, timing, etc.) —
+    #   not just the most severe. The patient has stopped moving and can absorb
+    #   a full critique. Use a separate if statement per independent check.
     # - Add corrective cues only for issues that actually occurred.
     # - If rep_count is 0 but movement was detected: describe what happened and what to do.
     # - Use separate if statements (NOT elif) for independent quality checks.
