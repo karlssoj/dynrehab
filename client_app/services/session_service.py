@@ -9,7 +9,7 @@ _CALIB_VIS_LOW = 0.2
 _CALIB_VIS_HIGH = 0.4
 _CALIB_MIN_HEIGHT = 0.60       # body (nose→ankle) must span ≥60% of frame height
 _CALIB_TOO_CLOSE_UPPER = 0.50  # nose→hip > this while ankles absent/low-vis → too close
-_CALIB_PROFILE_RATIO = 1.8     # dom/weak side visibility ratio above which person is in profile
+_CALIB_SPREAD_THRESHOLD = 0.05 # avg x-sep of joint pairs below this → person is in profile
 _CALIB_MIN_HIGH_VIS_KPS = 5    # at least this many of 9 critical KPs must be clearly visible
 _CALIB_HOLD_SECS = 1.5
 _CALIB_SPEAK_COOLDOWN = 4.0
@@ -311,20 +311,20 @@ class SessionService:
         else:
             return "too_far", "Move closer to the camera."
 
-        # Orientation check via left/right visibility asymmetry.
-        # Shoulder x-separation is unreliable at typical calibration distances on 16:9
-        # cameras (front-facing shoulder gap is only ~0.08–0.11 in normalised coords).
-        # When standing in profile, the near-side joints have much higher MediaPipe
-        # confidence than the occluded far-side joints — ratio ≥ _CALIB_PROFILE_RATIO.
-        _side_joints = ["left_shoulder", "left_hip", "left_knee", "left_ankle"]
-        _side_joints_r = ["right_shoulder", "right_hip", "right_knee", "right_ankle"]
-        l_vis = [kpts[k][3] for k in _side_joints if kpts.get(k)]
-        r_vis = [kpts[k][3] for k in _side_joints_r if kpts.get(k)]
-        avg_l = sum(l_vis) / len(l_vis) if l_vis else 0.0
-        avg_r = sum(r_vis) / len(r_vis) if r_vis else 0.0
-        dom = max(avg_l, avg_r)
-        weak = min(avg_l, avg_r)
-        is_profile = (dom > 0.3 and weak < 0.05) or (weak > 0 and dom / weak >= _CALIB_PROFILE_RATIO)
+        # Orientation check: when in profile, left/right paired joints (hip, knee,
+        # shoulder) appear at nearly the same x-coordinate. When facing the camera
+        # they spread apart. Average the x-separation across pairs.
+        _ORIENT_PAIRS = [
+            ("left_hip",      "right_hip"),
+            ("left_knee",     "right_knee"),
+            ("left_shoulder", "right_shoulder"),
+        ]
+        seps = [
+            abs(kpts[lk][0] - kpts[rk][0])
+            for lk, rk in _ORIENT_PAIRS
+            if kpts.get(lk) and kpts.get(rk)
+        ]
+        is_profile = len(seps) > 0 and (sum(seps) / len(seps)) < _CALIB_SPREAD_THRESHOLD
 
         if self._camera_view == "side" and not is_profile:
             return "wrong_orientation", "Turn sideways to the camera."

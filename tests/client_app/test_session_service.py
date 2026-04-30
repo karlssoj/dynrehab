@@ -382,46 +382,46 @@ def test_calibration_too_close_when_ankles_missing_and_upper_body_large():
     assert "back" in result.get("calibration_speak", "").lower()
 
 
-def test_calibration_wrong_orientation_frontal_near_symmetric_visibility():
+def test_calibration_wrong_orientation_frontal_joints_spread():
     """Front-facing person is detected as wrong orientation for a side-view exercise.
 
-    Uses visibility-asymmetry detection: both sides have similar confidence when
-    front-facing (ratio ~1.1), so is_profile=False → wrong_orientation for side exercises.
-    Even if some lower-body joints are slightly less confident, the left/right average
-    visibility remains close to symmetric.
+    When facing the camera, paired joints (left/right hip, knee, shoulder) have
+    clearly different x-coordinates. Average separation > _CALIB_SPREAD_THRESHOLD
+    → is_profile=False → wrong_orientation for a side exercise.
     """
     svc = SessionService(exercise_id="ex1", module_code=VALID_MODULE_CODE, camera_view="side")
     svc.start_calibration()
-    # Front-facing: both sides similar visibility — avg_l ≈ avg_r → not profile
+    # Front-facing: hip_sep=0.10, knee_sep=0.10, shoulder_sep=0.20 → avg=0.133 > 0.05
     kpts = {
         "nose":            _make_kp(0.5,  0.05, 0.9),
-        "left_shoulder":   _make_kp(0.35, 0.20, 0.85),
-        "right_shoulder":  _make_kp(0.65, 0.20, 0.85),
-        "left_hip":        _make_kp(0.45, 0.45, 0.80),
-        "right_hip":       _make_kp(0.55, 0.45, 0.80),
-        "left_knee":       _make_kp(0.45, 0.65, 0.75),
-        "right_knee":      _make_kp(0.55, 0.65, 0.75),
-        "left_ankle":      _make_kp(0.45, 0.85, 0.70),
-        "right_ankle":     _make_kp(0.55, 0.87, 0.70),
+        "left_shoulder":   _make_kp(0.40, 0.20, 0.9),
+        "right_shoulder":  _make_kp(0.60, 0.20, 0.9),
+        "left_hip":        _make_kp(0.45, 0.45, 0.9),
+        "right_hip":       _make_kp(0.55, 0.45, 0.9),
+        "left_knee":       _make_kp(0.45, 0.65, 0.9),
+        "right_knee":      _make_kp(0.55, 0.65, 0.9),
+        "left_ankle":      _make_kp(0.45, 0.85, 0.9),
+        "right_ankle":     _make_kp(0.55, 0.87, 0.9),
     }
     result = svc.process_frame({"keypoints": kpts})
     assert result["calibration_status"] == "wrong_orientation"
     assert result.get("calibration_message") == "Turn sideways to the camera."
 
 
-def test_calibration_profile_detected_via_visibility_asymmetry():
+def test_calibration_profile_detected_via_joint_pair_x_separation():
     """Correctly sideways person is NOT flagged as wrong orientation.
 
-    When standing in profile, far-side joints have ~0.35 visibility and near-side ~0.9,
-    giving dom/weak ≈ 2.6 which exceeds _CALIB_PROFILE_RATIO (1.8) → is_profile=True.
+    When in profile, left/right paired joints stack at the same x-coordinate.
+    Average x-separation < _CALIB_SPREAD_THRESHOLD → is_profile=True.
+    This works regardless of joint visibility.
     """
     svc = SessionService(exercise_id="ex1", module_code=VALID_MODULE_CODE, camera_view="side")
     svc.start_calibration()
-    # Sideways: right side (near) high-vis, left side (far) low-vis
+    # Sideways: left and right versions of each joint at same x; near-side high-vis
     kpts = {
         "nose":            _make_kp(0.5,  0.05, 0.9),
-        "left_shoulder":   _make_kp(0.5,  0.20, 0.35),  # far side
-        "right_shoulder":  _make_kp(0.5,  0.20, 0.90),  # near side
+        "left_shoulder":   _make_kp(0.5,  0.20, 0.35),
+        "right_shoulder":  _make_kp(0.5,  0.20, 0.90),
         "left_hip":        _make_kp(0.5,  0.45, 0.35),
         "right_hip":       _make_kp(0.5,  0.45, 0.90),
         "left_knee":       _make_kp(0.5,  0.65, 0.35),
@@ -430,7 +430,6 @@ def test_calibration_profile_detected_via_visibility_asymmetry():
         "right_ankle":     _make_kp(0.5,  0.87, 0.90),
     }
     result = svc.process_frame({"keypoints": kpts})
-    # Should be "ready", not "wrong_orientation" or "too_far"
     assert result["calibration_status"] == "ready"
 
 
