@@ -57,10 +57,10 @@ def main():
             cv2.waitKey(1)
             continue
 
-        state = runner.process_frame(pose_frame.to_dict())
+        pose_dict = pose_frame.to_dict()
+        state = runner.process_frame(pose_dict)
 
         # Attach live joint values for the display
-        pose_dict = pose_frame.to_dict()
         state["joint_values"] = {
             label: float(pose_dict.get(key, 0.0))
             for label, key in relevant_joints
@@ -94,9 +94,9 @@ def main():
                 runner.end_feedback()
             else:
                 # Round/window feedback: speak session summary then exit
-                _done = True
                 for line in runner.get_session_summary_speech():
                     tts.speak_sync(line)
+                _done = True
                 engine.stop()
                 break
 
@@ -105,6 +105,7 @@ def main():
             engine.stop()
             break
 
+    engine.stop()
     display.close()
     tts.stop()
 
