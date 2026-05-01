@@ -1,16 +1,16 @@
 """
-voice.py — TTS module for QTRobot exercise apps.
+voice.py — TTS module for standalone exercise apps.
 
 Launched automatically by run.py. Reads message_queue.jsonl (one JSON
-entry per line) and speaks each message in order via the QTRobot speech
-service (/qt_robot/speech/say). Writes voice_done.json after each speech
-so the exercise app knows when to advance.
+entry per line) and speaks each message in order via Windows PowerShell
+System.Speech. Writes voice_done.json after each speech so the exercise
+app knows when to advance.
 
-ROS is initialized in a background thread so that a slow or missing ROS
-master never blocks the poll loop — voice_done.json is always written.
+On QTRobot, use extras/qt_robot_app/ instead — it has its own TTS that
+calls the robot's speech service directly.
 """
 import json
-import threading
+import subprocess
 import time
 from pathlib import Path
 
@@ -18,36 +18,28 @@ _QUEUE_FILE = Path(__file__).parent / "message_queue.jsonl"
 _DONE_FILE = Path(__file__).parent / "voice_done.json"
 _POLL_INTERVAL = 0.1
 
-_say = None
-_ros_ready = False
-
-
-def _init_ros():
-    global _say, _ros_ready
-    try:
-        import rospy
-        from qt_robot_interface.srv import speech_say as _speech_say_srv
-        rospy.init_node('qt_exercise_voice', anonymous=True)
-        rospy.wait_for_service('/qt_robot/speech/say', timeout=10.0)
-        _say = rospy.ServiceProxy('/qt_robot/speech/say', _speech_say_srv)
-        _ros_ready = True
-        print("[voice] ROS speech service connected")
-    except Exception as e:
-        print(f"[voice] ROS init failed: {e} — running without speech")
-
 
 def _speak(text: str) -> None:
-    if not _ros_ready or _say is None:
-        return
-    try:
-        _say(str(text))
-    except Exception as e:
-        print(f"[voice] speak failed: {e}")
+    safe = text.replace("'", "''")
+    result = subprocess.run(
+        [
+            "powershell",
+            "-NonInteractive", "-NoProfile", "-WindowStyle", "Hidden",
+            "-Command",
+            f"Add-Type -AssemblyName System.Speech; "
+            f"$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+            f"Start-Sleep -Milliseconds 300; "
+            f"$s.Speak('{safe}')",
+        ],
+        timeout=120,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"[voice] speak failed (rc={result.returncode}): {result.stderr[:300]}")
 
 
 def main():
-    threading.Thread(target=_init_ros, daemon=True).start()
-
     last_pos = 0
     try:
         if _QUEUE_FILE.exists():
