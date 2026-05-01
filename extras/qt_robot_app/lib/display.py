@@ -85,12 +85,13 @@ class Display:
             return
         line_h = 30
         block_h = len(feedback) * line_h + 20
+        top_y = max(0, h - block_h)
         overlay = display.copy()
-        cv2.rectangle(overlay, (0, h - block_h), (w, h), (0, 0, 0), -1)
+        cv2.rectangle(overlay, (0, top_y), (w, h), (0, 0, 0), -1)
         cv2.addWeighted(overlay, 0.6, display, 0.4, 0, display)
         for i, line in enumerate(feedback):
             cv2.putText(display, line,
-                        (10, h - block_h + 20 + i * line_h),
+                        (10, top_y + 20 + i * line_h),
                         _FONT, 0.65, (255, 255, 100), 2)
 
     def close(self):

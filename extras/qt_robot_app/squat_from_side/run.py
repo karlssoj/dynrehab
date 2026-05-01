@@ -32,8 +32,10 @@ def main():
     _frame_q: queue.Queue = queue.Queue(maxsize=1)
 
     def _on_frame(pose_frame, annotated_frame):
-        if not _frame_q.full():
-            _frame_q.put((pose_frame, annotated_frame))
+        try:
+            _frame_q.put_nowait((pose_frame, annotated_frame))
+        except queue.Full:
+            pass
 
     engine.subscribe(_on_frame)
 

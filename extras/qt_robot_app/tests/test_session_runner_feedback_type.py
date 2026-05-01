@@ -84,3 +84,45 @@ def test_feedback_type_rep():
 
     assert result.get("feedback_lines") is not None
     assert result["feedback_type"] == "rep"
+
+
+def test_feedback_type_after_end_feedback_reverts_to_window():
+    """end_feedback() resumes exercise; subsequent window expiry should yield feedback_type=='window'."""
+    mod = _make_module(_AFTER_REP_MODULE_CODE)
+    config = {
+        "camera_view": "side",
+        "session_duration_secs": 60,
+        "feedback_mode": ["after_rep", "after_window"],
+    }
+    runner = SessionRunner(config, mod)
+    runner._enter_exercise()
+
+    # Trigger a rep
+    for _ in range(3):
+        runner.process_frame({"left_knee_bend_2d": 40.0, "keypoints": {}})
+    rep_result = runner.process_frame({"left_knee_bend_2d": 5.0, "keypoints": {}})
+    assert rep_result["feedback_type"] == "rep"
+
+    # Resume exercise after per-rep feedback
+    runner.end_feedback()
+    assert runner._state == "exercise"
+
+    # Fast-forward past session duration to trigger window feedback
+    runner._state_wall_start -= 70.0
+    window_result = runner.process_frame({"left_knee_bend_2d": 5.0, "keypoints": {}})
+    assert window_result["feedback_type"] == "window"
+
+
+def test_feedback_type_present_in_non_feedback_states():
+    """feedback_type field is always present in the result dict (initial dict path)."""
+    mod = _make_module(_BEND_MODULE_CODE)
+    config = {
+        "camera_view": "side",
+        "session_duration_secs": 60,
+        "feedback_mode": ["after_window"],
+    }
+    runner = SessionRunner(config, mod)
+    runner._enter_exercise()
+    result = runner.process_frame({"left_knee_bend_2d": 10.0, "keypoints": {}})
+    assert "feedback_type" in result
+    assert result["state"] == "exercise"
