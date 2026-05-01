@@ -21,6 +21,7 @@ def _worker():
             _say(str(text))
         except Exception as e:
             rospy.logwarn(f"[tts] speech failed: {e}")
+            _say = None
         finally:
             _q.task_done()
 
@@ -35,12 +36,18 @@ def speak(text: str) -> None:
 
 
 def speak_sync(text: str) -> None:
-    """Queue text and block until the worker has spoken it."""
+    """Queue text and block until the worker has spoken it.
+
+    Must only be called serially from a single thread and must not be
+    interleaved with concurrent speak() calls — Queue.join() waits for
+    all outstanding items, not only the item enqueued by this call.
+    """
     _q.put(str(text))
     _q.join()
 
 
 def stop() -> None:
-    """Signal the worker thread to exit."""
-    _q.put(None)
+    """Signal the worker thread to exit. Safe to call only once."""
+    if _worker_thread.is_alive():
+        _q.put(None)
     _worker_thread.join(timeout=2.0)
