@@ -1,47 +1,39 @@
 """
-voice.py — TTS module for standalone exercise apps.
+voice.py — TTS module for QTRobot exercise apps.
 
 Launched automatically by run.py. Reads message_queue.jsonl (one JSON
-entry per line) and speaks each message in order via Windows PowerShell
-System.Speech. Writes voice_done.json after each speech so the exercise
-app knows when to advance.
-
-On QTRobot, replace this file with a module that uses the robot's TTS API.
-Contract: read message_queue.jsonl, speak each entry's "text" in order,
-write voice_done.json with the entry's "timestamp" when done.
+entry per line) and speaks each message in order via the QTRobot speech
+service (/qt_robot/speech/say). Writes voice_done.json after each speech
+so the exercise app knows when to advance.
 """
 import json
-import subprocess
 import time
 from pathlib import Path
+import rospy
+from qt_robot_interface.srv import speech_say
 
 _QUEUE_FILE = Path(__file__).parent / "message_queue.jsonl"
 _DONE_FILE = Path(__file__).parent / "voice_done.json"
 _POLL_INTERVAL = 0.1
 
+_say = None
+
 
 def _speak(text: str) -> None:
-    safe = text.replace("'", "''")
-    result = subprocess.run(
-        [
-            "powershell",
-            "-NonInteractive", "-NoProfile", "-WindowStyle", "Hidden",
-            "-Command",
-            f"Add-Type -AssemblyName System.Speech; "
-            f"$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
-            f"Start-Sleep -Milliseconds 300; "
-            f"$s.Speak('{safe}')",
-        ],
-        timeout=120,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        print(f"[voice] speak failed (rc={result.returncode}): {result.stderr[:300]}")
+    global _say
+    try:
+        if _say is None:
+            rospy.wait_for_service('/qt_robot/speech/say', timeout=5.0)
+            _say = rospy.ServiceProxy('/qt_robot/speech/say', speech_say)
+        _say(str(text))
+    except Exception as e:
+        rospy.logwarn(f"[voice] speak failed: {e}")
+        _say = None
 
 
 def main():
-    # Seek past any existing queue entries so old messages aren't replayed
+    rospy.init_node('qt_exercise_voice', anonymous=True)
+
     last_pos = 0
     try:
         if _QUEUE_FILE.exists():
@@ -49,9 +41,9 @@ def main():
     except Exception:
         pass
 
-    print("[voice] ready — watching message_queue.jsonl")
+    rospy.loginfo("[voice] ready — watching message_queue.jsonl")
 
-    while True:
+    while not rospy.is_shutdown():
         try:
             if _QUEUE_FILE.exists():
                 with open(_QUEUE_FILE, encoding="utf-8") as f:
@@ -65,16 +57,16 @@ def main():
                             ts = data.get("timestamp")
                             text = data.get("text", "")
                             if text and ts:
-                                print(f"[voice] {data.get('type', '?')}: {text}")
+                                rospy.loginfo(f"[voice] {data.get('type', '?')}: {text}")
                                 _speak(text)
                                 _DONE_FILE.write_text(
                                     json.dumps({"timestamp": ts}), encoding="utf-8"
                                 )
                         except Exception as e:
-                            print(f"[voice] entry error: {e}")
+                            rospy.logwarn(f"[voice] entry error: {e}")
                     last_pos = f.tell()
         except Exception as e:
-            print(f"[voice] error: {e}")
+            rospy.logwarn(f"[voice] error: {e}")
         time.sleep(_POLL_INTERVAL)
 
 
