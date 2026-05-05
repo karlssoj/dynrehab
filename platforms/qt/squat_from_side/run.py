@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import os
 import queue
 import sys
 from pathlib import Path
@@ -14,6 +13,7 @@ import exercise_config
 import analysis_module
 import tts
 from core.pose_engine import PoseEngine
+from core.pose_backends import create_backend
 from session_runner import SessionRunner
 from display import Display
 
@@ -27,7 +27,7 @@ def main():
         window_name=config.get("name", "QT Exercise"),
         exercise_secs=config.get("session_duration_secs", 60),
     )
-    engine = PoseEngine()
+    engine = PoseEngine(backend=create_backend(config))
 
     _frame_q: queue.Queue = queue.Queue(maxsize=1)
 
@@ -39,7 +39,6 @@ def main():
 
     engine.subscribe(_on_frame)
 
-    # Speak instructions synchronously before starting the loop
     for line in runner.get_instructions():
         tts.speak_sync(line)
     runner.start_calibration()
@@ -62,40 +61,33 @@ def main():
         pose_dict = pose_frame.to_dict()
         state = runner.process_frame(pose_dict)
 
-        # Attach live joint values for the display
         state["joint_values"] = {
             label: float(pose_dict.get(key, 0.0))
             for label, key in relevant_joints
         }
 
-        # Calibration speech — deduplicated, async
         calib_speak = state.get("calibration_speak")
         if calib_speak and calib_speak != _last_calib_speak:
             _last_calib_speak = calib_speak
             tts.speak(calib_speak)
 
-        # Countdown speech — fires once per number change, async
         cnt = state.get("countdown_speak")
         if cnt is not None and cnt != _last_countdown:
             _last_countdown = cnt
             tts.speak(str(cnt) if cnt > 0 else "Go!")
 
-        # Rep cue speech — deduplicated, async
         rep_cue = state.get("rep_cue")
         if rep_cue and rep_cue != _last_rep_cue:
             _last_rep_cue = rep_cue
             tts.speak(rep_cue)
 
-        # Feedback speech — synchronous so the patient hears it before advancing
         feedback = state.get("feedback_lines")
         if feedback:
             for line in feedback:
                 tts.speak_sync(line)
             if state.get("feedback_type") == "rep":
-                # Per-rep feedback: resume exercise after speaking
                 runner.end_feedback()
             else:
-                # Round/window feedback: speak session summary then exit
                 for line in runner.get_session_summary_speech():
                     tts.speak_sync(line)
                 _done = True

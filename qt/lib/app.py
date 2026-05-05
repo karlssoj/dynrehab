@@ -11,6 +11,7 @@ import numpy as np
 from PIL import Image
 
 from core.pose_engine import PoseEngine
+from core.pose_backends import create_backend
 from core.data_contract import PoseFrame
 from session_runner import SessionRunner
 
@@ -131,7 +132,7 @@ class SessionFrame(ctk.CTkFrame):
         self._on_done = on_done
         self._feedback_dir = feedback_dir
         self._video_source = video_source
-        self._engine = PoseEngine()
+        self._engine = PoseEngine(backend=create_backend(config))
         self._runner = SessionRunner(config, analysis_module)
         self._feedback_lines: list[str] = []
         self._exercise_secs: int = config.get("session_duration_secs", 60)

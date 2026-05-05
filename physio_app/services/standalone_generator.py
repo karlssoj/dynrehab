@@ -133,6 +133,7 @@ import exercise_config
 import analysis_module
 import tts
 from core.pose_engine import PoseEngine
+from core.pose_backends import create_backend
 from session_runner import SessionRunner
 from display import Display
 
@@ -146,7 +147,7 @@ def main():
         window_name=config.get("name", "QT Exercise"),
         exercise_secs=config.get("session_duration_secs", 60),
     )
-    engine = PoseEngine()
+    engine = PoseEngine(backend=create_backend(config))
 
     _frame_q: queue.Queue = queue.Queue(maxsize=1)
 
@@ -279,7 +280,7 @@ def _render_robot_config(ex) -> str:
 def _sync_lib_core():
     core_dst = _QT_DIR / "lib" / "core"
     core_dst.mkdir(parents=True, exist_ok=True)
-    for fname in ("pose_engine.py", "angle_calculator.py", "data_contract.py"):
+    for fname in ("pose_engine.py", "angle_calculator.py", "data_contract.py", "pose_backends.py"):
         src = _CORE_SRC / fname
         if src.exists():
             shutil.copy2(src, core_dst / fname)
