@@ -6,6 +6,7 @@ import numpy as np
 import cv2
 from PIL import Image
 from core.pose_engine import PoseEngine
+from core.pose_backends import create_backend
 from core.data_contract import PoseFrame
 from client_app.services.session_service import SessionService
 from client_app.services.tts_service import TTSService
@@ -19,7 +20,7 @@ class SessionViewFrame(ctk.CTkFrame):
         self.app = parent
         self.exercise_id = exercise_id
         self.ex_svc = ExerciseService(db_conn)
-        self._engine = PoseEngine()
+        self._engine: PoseEngine = None
         self._session: SessionService = None
         self._tts = TTSService(cooldown_seconds=0.0)
         self._feedback_lines: list[str] = []
@@ -101,6 +102,11 @@ class SessionViewFrame(ctk.CTkFrame):
             self._feedback_mode = json.loads(ex.feedback_mode) if ex.feedback_mode else ["after_window"]
         except (json.JSONDecodeError, TypeError):
             self._feedback_mode = ["after_window"]
+        backend_config = {
+            "pose_backend": getattr(ex, "pose_backend", "mediapipe"),
+            "yolo_model": getattr(ex, "yolo_model", "yolo11n-pose.pt"),
+        }
+        self._engine = PoseEngine(backend=create_backend(backend_config))
         self._session = SessionService(exercise_id=self.exercise_id,
                                        module_code=module["code"],
                                        exercise_secs=self._exercise_secs,
@@ -393,8 +399,9 @@ class SessionViewFrame(ctk.CTkFrame):
 
     def _end_session(self):
         self._tts.stop()
-        self._engine.stop()
-        self._engine.unsubscribe(self._on_frame)
+        if self._engine:
+            self._engine.stop()
+            self._engine.unsubscribe(self._on_frame)
         if self._session and "after_exercise" in self._feedback_mode:
             summary_lines = self._session.get_session_summary_speech()
             if summary_lines:
@@ -406,6 +413,7 @@ class SessionViewFrame(ctk.CTkFrame):
 
     def _go_home(self):
         self._tts.stop()
-        self._engine.stop()
-        self._engine.unsubscribe(self._on_frame)
+        if self._engine:
+            self._engine.stop()
+            self._engine.unsubscribe(self._on_frame)
         self.app.show_launcher()
