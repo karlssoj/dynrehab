@@ -11,7 +11,7 @@ and the same analysis module interface as the physio portal's desktop app (`qt/`
 ## Running an exercise
 
 ```bash
-cd extras/qt_robot_app/squat_from_side
+cd platforms/qt/squat_from_side
 python run.py
 ```
 
@@ -19,7 +19,7 @@ Press **ESC** to exit early.
 
 ## Adding a new exercise
 
-1. Create a new folder: `extras/qt_robot_app/<exercise_name>/`
+1. Create a new folder: `platforms/qt/<exercise_name>/`
 
 2. Create `__init__.py` (empty) and `exercise_config.py`:
 

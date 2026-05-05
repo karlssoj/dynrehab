@@ -6,7 +6,7 @@ entry per line) and speaks each message in order via Windows PowerShell
 System.Speech. Writes voice_done.json after each speech so the exercise
 app knows when to advance.
 
-On QTRobot, use extras/qt_robot_app/ instead — it has its own TTS that
+On QTRobot, use platforms/qt/ instead — it has its own TTS that
 calls the robot's speech service directly.
 """
 import json

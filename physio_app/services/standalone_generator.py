@@ -6,7 +6,7 @@ from physio_app.services.exercise_service import ExerciseService
 
 _REPO_ROOT = Path(__file__).parent.parent.parent
 _QT_DIR = _REPO_ROOT / "qt"
-_ROBOT_DIR = _REPO_ROOT / "extras" / "qt_robot_app"
+_ROBOT_DIR = _REPO_ROOT / "platforms" / "qt"
 _CORE_SRC = _REPO_ROOT / "core"
 
 _VOICE_PY = '''\
@@ -323,7 +323,7 @@ class StandaloneGenerator:
 
         robot_dir = _ROBOT_DIR / slug
         if robot_dir.exists():
-            print(f"[standalone] warning: extras/qt_robot_app/{slug}/ already exists, overwriting")
+            print(f"[standalone] warning: platforms/qt/{slug}/ already exists, overwriting")
         robot_dir.mkdir(parents=True, exist_ok=True)
         (robot_dir / "__init__.py").write_text("", encoding="utf-8")
         (robot_dir / "exercise_config.py").write_text(
@@ -333,4 +333,4 @@ class StandaloneGenerator:
             module["code"], encoding="utf-8"
         )
         (robot_dir / "run.py").write_text(_ROBOT_RUN_PY, encoding="utf-8")
-        print(f"[standalone] generated extras/qt_robot_app/{slug}/")
+        print(f"[standalone] generated platforms/qt/{slug}/")
