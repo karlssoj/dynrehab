@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import math
 import statistics
 
@@ -7,15 +9,10 @@ import statistics
 _phase = "ready"          # "ready" | "moving"
 _rep_count = 0
 
-# Loose thresholds for rep detection (independent of quality boundary values)
-_REP_START_BEND = 25.0    # knee bend degrees to register "moving"
-_REP_RESET_BEND = 12.0    # knee bend degrees to return to "ready"
-
 _VIS_THRESHOLD = 0.35
 
-
 # ---------------------------------------------------------------------------
-# Low-level helpers
+# Internal helpers
 # ---------------------------------------------------------------------------
 
 def _best_knee_bend(pose_data: dict) -> float:
@@ -54,30 +51,42 @@ def _heel_rise(pose_data: dict, side: str = "auto") -> float:
     return foot_index[1] - heel[1]
 
 
-def _avg_trunk_lean(frames: list) -> float:
+def _trunk_lean(frames: list) -> float:
+    """Return mean trunk lean over the supplied frames (degrees from vertical)."""
     vals = [f.get("trunk_lean_2d", 0.0) or 0.0 for f in frames]
     vals = [v for v in vals if v >= 0.0]
     return statistics.mean(vals) if vals else 0.0
 
 
 def _max_knee_bend(frames: list) -> float:
-    vals = [_best_knee_bend(f) for f in frames]
-    return max(vals) if vals else 0.0
+    """Return the maximum knee bend (0=straight) seen across the supplied frames."""
+    bends = [_best_knee_bend(f) for f in frames]
+    return max(bends) if bends else 0.0
 
 
 def _shoulder_drift(frames: list) -> float:
     """
-    Returns the range (max - min) of the shoulder x-position across frames,
-    normalised to frame width [0,1].  Large values indicate excessive
-    forward/backward shoulder drift.
+    Estimate horizontal shoulder drift from vertical during the squat.
+    Returns the range of the shoulder x-coordinate across the frames (in
+    normalised image units).  Large values indicate the torso is lurching
+    forward or backward rather than moving vertically.
     """
+    kpts_list = [f.get("keypoints", {}) for f in frames]
     xs = []
-    for f in frames:
-        kpts = f.get("keypoints", {})
-        for side in ("left_shoulder", "right_shoulder"):
-            lm = kpts.get(side)
-            if lm and lm[3] >= _VIS_THRESHOLD:
-                xs.append(lm[0])
+    for kpts in kpts_list:
+        ls = kpts.get("left_shoulder")
+        rs = kpts.get("right_shoulder")
+        # prefer the shoulder with better visibility
+        if ls and rs:
+            chosen = ls if ls[3] >= rs[3] else rs
+        elif ls:
+            chosen = ls
+        elif rs:
+            chosen = rs
+        else:
+            continue
+        if chosen[3] >= _VIS_THRESHOLD:
+            xs.append(chosen[0])
     if len(xs) < 2:
         return 0.0
     return max(xs) - min(xs)
@@ -87,31 +96,11 @@ def _shoulder_drift(frames: list) -> float:
 # Public API
 # ---------------------------------------------------------------------------
 
-def get_instructions() -> list:
+def get_instructions() -> list[str]:
     return [
         "Stand sideways to the camera with your feet shoulder-width apart.",
-        "Perform slow, controlled squats, bending your knees to about ninety degrees, "
-        "then return to standing."
+        "Perform a controlled squat, bending your knees to about ninety degrees, then return to standing.",
     ]
-
-
-def detect_rep(pose_data: dict) -> bool:
-    global _phase, _rep_count
-
-    bend = _best_knee_bend(pose_data)
-
-    if _phase == "ready":
-        if bend >= _REP_START_BEND:
-            _phase = "moving"
-            return False
-
-    elif _phase == "moving":
-        if bend <= _REP_RESET_BEND:
-            _phase = "ready"
-            _rep_count += 1
-            return True
-
-    return False
 
 
 def reset_round():
@@ -120,194 +109,192 @@ def reset_round():
     _rep_count = 0
 
 
-def generate_rep_feedback(rep_data: dict) -> list:
+def detect_rep(pose_data: dict) -> bool:
+    """
+    Two-phase state machine:
+      ready   → moving  when knee bend exceeds ~30 degrees
+      moving  → ready   when knee bend returns to under ~15 degrees  → count rep
+    """
+    global _phase, _rep_count
+
+    bend = _best_knee_bend(pose_data)
+
+    if _phase == "ready":
+        if bend > 30.0:
+            _phase = "moving"
+    elif _phase == "moving":
+        if bend < 15.0:
+            _phase = "ready"
+            _rep_count += 1
+            return True
+
+    return False
+
+
+def generate_rep_feedback(rep_data: dict) -> list[str]:
     rep_number = rep_data.get("rep_number", 1)
     frames = rep_data.get("frames", [])
 
-    lines = []
-
-    # --- Opening acknowledgement ---
-    lines.append(f"Rep {rep_number} done.")
+    lines = [f"Rep {rep_number} done."]
 
     if not frames:
-        lines.append("Keep going — focus on your form.")
+        lines.append("Keep going — maintain a controlled pace.")
         return lines
 
     bent_frames = _depth_frames(frames)
-    max_bend = _max_knee_bend(frames)
-    avg_lean = _avg_trunk_lean(bent_frames if bent_frames else frames)
 
-    # --- 1. Heel rise (highest priority — injury risk) ---
+    # --- 1. Heel rise (highest injury-risk priority) ---
     if bent_frames:
         rises = [_heel_rise(f) for f in bent_frames]
         if rises and max(rises) > 0.02:
-            lines.append("Keep your heels flat on the floor as you squat down.")
+            lines.append(
+                "Your heels lifted off the floor — focus on keeping them flat as you squat down."
+            )
 
-    # --- 2. Knees over toes ---
+    # --- 2. Knees travelling too far forward ---
     avg_shin = _avg_shin_angle(bent_frames if bent_frames else frames)
-    if avg_shin > 30:
+    if avg_shin > 30.0:
         lines.append(
-            "Push your hips back a little more — your knees are travelling too far over your toes."
+            "Your knees are travelling too far over your toes — push your hips back and keep your shins more vertical."
         )
 
     # --- 3. Squat depth ---
-    # Boundary value: knee bend should exceed 90 degrees (i.e. bend > 90)
-    if max_bend < 90:
+    max_bend = _max_knee_bend(frames)
+    if max_bend < 60.0:
         lines.append(
-            "Try to squat a little deeper — aim for a full ninety-degree bend at the knee."
+            "Try to squat a little deeper — aim to get your thighs closer to parallel with the floor."
         )
-    else:
-        lines.append("Good depth on that rep.")
+    elif max_bend >= 90.0:
+        lines.append("Great depth — you reached a full ninety-degree squat.")
 
     # --- 4. Torso lean ---
-    # Boundary: 20–45 degrees is acceptable
-    if avg_lean < 20:
+    mean_lean = _trunk_lean(frames)
+    if mean_lean > 45.0:
         lines.append(
-            "You can allow a slight forward lean through your torso — that is completely normal."
+            "You are leaning too far forward with your torso — try to keep your chest more upright throughout the movement."
         )
-    elif avg_lean > 45:
+    elif mean_lean < 5.0 and max_bend > 40.0:
+        # Suspiciously upright — may indicate compensatory movement but is not harmful; skip.
+        pass
+
+    # --- 5. Shoulder vertical path ---
+    drift = _shoulder_drift(frames)
+    if drift > 0.15:
         lines.append(
-            "Try to keep your chest a little more upright — you are leaning forward too much."
+            "Your shoulders are drifting forward — try to move more vertically and keep your weight centred."
         )
 
-    # --- Positive close if no corrections were needed ---
-    correction_keywords = [
-        "heels", "knees", "deeper", "lean"
-    ]
-    corrections_given = any(
-        any(kw in sentence for kw in correction_keywords)
-        for sentence in lines[1:]
-    )
-    if not corrections_given:
-        lines.append("Great form — keep that controlled movement going.")
+    # --- Encouragement if no issues found ---
+    if len(lines) == 1:
+        lines.append("Excellent form — keep up the controlled movement.")
 
     return lines
 
 
-def get_session_summary(session_data: dict) -> list:
+def get_session_summary(session_data: dict) -> list[str]:
     total_reps = session_data.get("total_reps", 0)
     rounds = session_data.get("rounds", [])
     round_feedback = session_data.get("round_feedback", [])
 
     lines = []
 
-    # --- Zero reps guard ---
+    # --- Zero reps edge case ---
     if total_reps == 0:
         lines.append("No reps were completed this session.")
         lines.append(
-            "Next time, stand directly sideways to the camera and try to bend your knees "
-            "as far as you comfortably can before returning to standing."
-        )
-        lines.append(
-            "If you are unsure of the movement, ask your physiotherapist to demonstrate it first."
+            "Next time, stand sideways to the camera, bend your knees as if sitting back into a chair, "
+            "and aim to reach a ninety-degree knee bend before returning to standing."
         )
         return lines
 
-    lines.append(
-        f"Well done — you completed {total_reps} squat{'s' if total_reps != 1 else ''} this session."
-    )
+    lines.append(f"You completed {total_reps} squat{'s' if total_reps != 1 else ''} in total — well done.")
 
-    # --- Per-round depth analysis ---
+    # --- Depth progression across rounds ---
     round_peaks = []
     for r in rounds:
         r_frames = r.get("frames", [])
-        vals = [_best_knee_bend(f) for f in r_frames if _best_knee_bend(f) > 5]
-        round_peaks.append(max(vals) if vals else 0.0)
+        bends = [_best_knee_bend(f) for f in r_frames if _best_knee_bend(f) > 5]
+        round_peaks.append(max(bends) if bends else 0.0)
 
-    depth_threshold = 90.0
+    _DEPTH_THRESHOLD = 90.0  # bend degrees for a full squat
 
     if len(round_peaks) >= 2:
         first = round_peaks[0]
         last = round_peaks[-1]
-        if last > first + 10:
-            lines.append("Your squat depth improved as the session went on — nice progression.")
-        elif first > last + 10:
+        if last > first + 10.0:
+            lines.append("Your squat depth improved as the session progressed — great work pushing deeper.")
+        elif first > last + 10.0:
             lines.append(
-                f"Your depth was a little shallower in the later rounds — "
-                "try to maintain the same range throughout."
+                f"Your depth was best in round 1 and decreased toward the end — this may be fatigue, "
+                "so focus on maintaining form as you tire."
             )
-        elif all(p >= depth_threshold for p in round_peaks):
-            lines.append("You reached a good knee bend depth in every round.")
-        else:
-            shallow_rounds = [i + 1 for i, p in enumerate(round_peaks) if p < depth_threshold]
-            if shallow_rounds:
-                round_str = ", ".join(f"round {r}" for r in shallow_rounds)
-                lines.append(
-                    f"The squats were a little shallow in {round_str} — "
-                    "aim for a full ninety-degree bend each time."
-                )
-    elif len(round_peaks) == 1:
-        if round_peaks[0] >= depth_threshold:
-            lines.append("You reached a good squat depth.")
-        else:
+        elif all(p >= _DEPTH_THRESHOLD for p in round_peaks):
+            lines.append("You maintained excellent squat depth in every round.")
+        elif all(p < _DEPTH_THRESHOLD for p in round_peaks):
             lines.append(
-                "Your squat depth was a little shallow — try to bend your knees to ninety degrees."
+                "Your squat depth was a little shallow across all rounds — work on sitting back further to reach the full ninety-degree bend."
             )
 
-    # --- Persistent issues from round feedback ---
-    def _issue_in_feedback(fb_list, keyword):
-        return any(
-            any(keyword in sentence for sentence in round_fb)
-            for round_fb in fb_list
-            if round_fb
-        )
+    # --- Persistent form issues detected from round feedback ---
+    heel_issue_rounds = []
+    knee_forward_rounds = []
+    lean_issue_rounds = []
 
-    def _issue_in_all_feedback(fb_list, keyword):
-        if not fb_list:
-            return False
-        return all(
-            any(keyword in sentence for sentence in round_fb)
-            for round_fb in fb_list
-            if round_fb
-        )
+    for i, fb_list in enumerate(round_feedback):
+        round_label = f"round {i + 1}"
+        if not isinstance(fb_list, list):
+            continue
+        combined = " ".join(fb_list).lower()
+        if "heel" in combined:
+            heel_issue_rounds.append(round_label)
+        if "toes" in combined or "shin" in combined or "knees are travelling" in combined:
+            knee_forward_rounds.append(round_label)
+        if "leaning" in combined or "forward" in combined and "torso" in combined:
+            lean_issue_rounds.append(round_label)
 
-    # Heel rise
-    if _issue_in_all_feedback(round_feedback, "heels"):
-        lines.append(
-            "Your heels were lifting throughout the session — working on ankle mobility "
-            "exercises between sessions would help."
-        )
-    elif _issue_in_feedback(round_feedback, "heels"):
-        lines.append(
-            "There were some moments where your heels lifted — focus on keeping them "
-            "grounded as you squat deeper."
-        )
+    if heel_issue_rounds:
+        if len(heel_issue_rounds) == len(round_feedback) and len(round_feedback) > 0:
+            lines.append(
+                "Heel rise was noted in every round — work on ankle mobility stretches between sessions to help keep your heels flat."
+            )
+        else:
+            rounds_str = " and ".join(heel_issue_rounds)
+            lines.append(
+                f"Heel lifting was detected in {rounds_str} — keep practising ankle flexibility to address this."
+            )
 
-    # Knees over toes
-    if _issue_in_all_feedback(round_feedback, "knees are travelling"):
-        lines.append(
-            "Your knees were consistently travelling too far forward — "
-            "practise sitting your hips back as you descend."
-        )
-    elif _issue_in_feedback(round_feedback, "knees are travelling"):
-        lines.append(
-            "At times your knees moved too far over your toes — "
-            "think about pushing your hips back as you squat down."
-        )
+    if knee_forward_rounds:
+        if len(knee_forward_rounds) == len(round_feedback) and len(round_feedback) > 0:
+            lines.append(
+                "Your knees consistently travelled too far over your toes — focus on pushing your hips back at the start of each squat."
+            )
+        else:
+            rounds_str = " and ".join(knee_forward_rounds)
+            lines.append(
+                f"Knee forward travel was an issue in {rounds_str} — practise sitting back into the squat."
+            )
 
-    # Torso lean
-    if _issue_in_all_feedback(round_feedback, "leaning forward too much"):
-        lines.append(
-            "Your torso was leaning forward throughout — "
-            "focus on keeping your chest up and your back tall."
-        )
-    elif _issue_in_feedback(round_feedback, "leaning forward too much"):
-        lines.append(
-            "There were moments of excessive forward lean — "
-            "keep your chest facing forward as much as you can."
-        )
+    if lean_issue_rounds:
+        if len(lean_issue_rounds) == len(round_feedback) and len(round_feedback) > 0:
+            lines.append(
+                "Excessive forward lean appeared throughout the session — working on hip and ankle flexibility should help you stay more upright."
+            )
+        else:
+            rounds_str = " and ".join(lean_issue_rounds)
+            lines.append(
+                f"Torso lean was too far forward in {rounds_str} — try to keep your chest lifted as you descend."
+            )
 
-    # --- Closing encouragement ---
-    lines.append(
-        "Keep practising your squats — consistency will build both strength and control."
-    )
+    # --- Positive close if no major persistent issues ---
+    if not heel_issue_rounds and not knee_forward_rounds and not lean_issue_rounds:
+        lines.append("Your form was consistent across the session — keep up the excellent work.")
 
     return lines
 
 
 def get_relevant_joints() -> list:
     return [
-        ("Left Knee", "left_knee_bend_2d"),
-        ("Right Knee", "right_knee_bend_2d"),
+        ("L Knee Bend", "left_knee_bend_2d"),
+        ("R Knee Bend", "right_knee_bend_2d"),
         ("Torso Lean", "trunk_lean_2d"),
     ]

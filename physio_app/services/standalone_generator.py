@@ -330,8 +330,11 @@ class StandaloneGenerator:
         (robot_dir / "exercise_config.py").write_text(
             _render_robot_config(ex), encoding="utf-8"
         )
+        robot_module_code = module["code"]
+        if "from __future__ import annotations" not in robot_module_code:
+            robot_module_code = "from __future__ import annotations\n\n" + robot_module_code
         (robot_dir / "analysis_module.py").write_text(
-            module["code"], encoding="utf-8"
+            robot_module_code, encoding="utf-8"
         )
         (robot_dir / "run.py").write_text(_ROBOT_RUN_PY, encoding="utf-8")
         print(f"[standalone] generated platforms/qt/{slug}/")
