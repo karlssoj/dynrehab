@@ -94,15 +94,41 @@ The generated module implements the following function interface:
       phase (str)           — optional label for the current movement
                               phase, used for display purposes
 
+A critical aspect of this design is the distinction between continuous rule
+evaluation and event-driven feedback emission. process_frame() is invoked on
+every incoming camera frame throughout the active exercise phase, and the
+analysis module maintains persistent mutable state across these invocations.
+This state typically includes angle history buffers accumulating measurements
+over time, phase trackers encoding the current stage of a movement cycle
+(e.g. descent, hold, ascent in a squat), and per-repetition quality accumulators
+recording constraint violations observed across all frames of a single
+repetition. Rule evaluation is therefore a continuous, frame-by-frame process
+that aggregates evidence over the temporal extent of a movement.
+
+Feedback emission, by contrast, is event-driven and occurs on a single
+transition frame. When the analysis module detects a completion event — such
+as the joint angle crossing the extension threshold that marks the end of a
+repetition, or the session timer reaching zero — it synthesises feedback_lines
+from its accumulated state on that specific frame and includes them in the
+returned result dictionary. The session runner, upon receiving a non-empty
+feedback_lines value, transitions immediately to the feedback state to deliver
+the feedback. The module's reset_round() function is subsequently called to
+clear accumulated state before the next repetition or session begins.
+
+This architecture ensures that feedback reflects the full temporal trajectory
+of a movement rather than the instantaneous joint configuration at any single
+point, while keeping the interface between the dynamic analysis module and the
+static infrastructure simple and frame-synchronous.
+
 The LLM is responsible for translating the physiotherapist's boundary values
 into concrete conditional expressions within process_frame(). Typical patterns
 include threshold comparisons on individual joint angles to detect movement
 phases (e.g. flexion onset, maximum depth, extension return), temporal
 accumulation over a sliding window to distinguish held positions from
 transient fluctuations, and multi-joint constraint checks to assess postural
-quality. Feedback generation logic maps combinations of constraint violations
-to natural-language feedback strings that are biomechanically meaningful and
-patient-appropriate.
+quality across the frames of a repetition. Feedback generation logic maps
+combinations of accumulated constraint violations to natural-language feedback
+strings that are biomechanically meaningful and patient-appropriate.
 
 2.3 Validation and Package Generation
 
@@ -217,18 +243,24 @@ over five sequential states:
   exercise
     The active exercise window. On each frame, the runner calls
     analysis_module.process_frame() with the current joint angle
-    dictionary. It interprets the returned result to update the
-    repetition counter, issue spoken movement cues (rep_cue), and
-    detect when a feedback event should be triggered (rep_detected or
-    session end). The exercise window is bounded by the configured
-    session duration.
+    dictionary. The analysis module continuously evaluates its
+    exercise-specific rules and accumulates movement quality data across
+    frames for the duration of each repetition. The runner interprets
+    the returned result to update the repetition counter and issue
+    spoken movement cues (rep_cue) as appropriate. When the analysis
+    module detects a repetition completion or the configured session
+    duration elapses, it emits feedback_lines on that single transition
+    frame, signalling the runner to advance to the feedback state.
 
   feedback
-    When a repetition or the session concludes, the runner transitions
-    to the feedback state. The feedback_lines returned by the analysis
-    module are delivered sequentially via TTS. For per-repetition
-    feedback, the runner returns to the exercise state upon completion.
-    For session-end feedback, the session terminates.
+    Upon receiving a non-empty feedback_lines result from the analysis
+    module, the runner transitions to the feedback state. The feedback
+    statements — synthesised by the analysis module from movement quality
+    data accumulated across the preceding repetition or session — are
+    delivered sequentially via TTS. For per-repetition feedback, the
+    runner calls reset_round() on the analysis module to clear its
+    accumulated state and returns to the exercise state. For session-end
+    feedback, the session terminates.
 
 3.5 Display
 
@@ -275,8 +307,14 @@ during the active exercise phase:
       by get_relevant_joints() and calls analysis_module.process_frame()
       with this dictionary.
 
-  (8) The analysis module applies its exercise-specific rules and thresholds,
-      updates its internal state, and returns a result dictionary.
+  (8) The analysis module applies its exercise-specific rules and thresholds
+      to the current frame, updates its internal state (angle history buffers,
+      phase trackers, per-repetition quality accumulators), and returns a
+      result dictionary. Rule evaluation is continuous across every frame;
+      feedback_lines are included in the result only on the single transition
+      frame on which a repetition completion or session-end event is detected,
+      at which point they reflect movement quality data aggregated across all
+      frames of the preceding repetition or session.
 
   (9) The SessionRunner interprets the result: increments the rep counter
       if rep_detected is set, issues a spoken cue if rep_cue is present,
