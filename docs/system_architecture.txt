@@ -1,149 +1,317 @@
-System Architecture: LLM-Driven Exercise Generation for QT Robot
-=================================================================
-
-Overview
---------
-The system enables a physiotherapist to define a rehabilitation exercise through a
-configuration interface. The exercise specification is processed by a large language
-model (LLM) to generate rule-based analysis code that is deployed to and executed
-on a QT humanoid robot. The pipeline separates static infrastructure (pose estimation,
-session management, display) from dynamically generated, exercise-specific logic.
+System Architecture: LLM-Driven Exercise Generation and Execution
+on a QT Humanoid Robot Platform
+==================================================================
 
 
-Exercise Authoring Pipeline
-----------------------------
-1. A physiotherapist defines an exercise by specifying:
-   - Exercise name and camera view (frontal or side)
-   - Client instructions (spoken aloud at session start)
-   - Boundary values: biomechanical thresholds relevant to the exercise
-     (e.g. minimum knee flexion angle for a squat, acceptable trunk lean range)
-   - Session parameters: duration, feedback timing (after each rep, after session)
+1. Introduction
+---------------
+This document describes the technical architecture of a rehabilitation exercise
+system in which a physiotherapist-defined exercise specification is automatically
+transformed into executable robot software through large language model (LLM)
+code generation. The system targets the QT humanoid robot platform, which provides
+an RGB-D camera, a display screen, and a text-to-speech (TTS) service exposed
+through the Robot Operating System (ROS).
 
-2. These specifications are submitted to an LLM with a structured prompt that
-   instructs it to generate a Python analysis module implementing a fixed API
-   contract. The LLM produces exercise-specific, rule-based logic that encodes
-   the physiotherapist's boundary values into conditional checks applied to
-   real-time joint angle data.
-
-3. The generated module is reviewed and validated. On validation, the system
-   automatically invokes the StandaloneGenerator, which assembles a self-contained
-   robot exercise package and writes it to platforms/qt/<exercise_slug>/.
-
-4. The exercise package is version-controlled (Git) and deployed to the robot
-   by pushing to a shared repository and pulling on the robot.
+The central design principle is a strict separation between static infrastructure
+and dynamically generated, exercise-specific logic. The static layer — comprising
+pose estimation, joint angle calculation, session state management, display
+rendering, and speech synthesis — is implemented once and shared across all
+exercises. The dynamic layer — comprising movement analysis rules, repetition
+detection logic, and feedback generation — is produced on demand by an LLM
+from a structured natural-language specification authored by the physiotherapist.
+This separation allows new exercises to be introduced without modifying or
+re-deploying the robot infrastructure.
 
 
-Generated Exercise Package (Dynamic)
---------------------------------------
-Each exercise produces the following files under platforms/qt/<exercise_slug>/:
+2. Exercise Authoring and Code Generation Pipeline
+---------------------------------------------------
+The pipeline proceeds through four stages: specification, code generation,
+validation, and deployment.
 
-  exercise_config.py
-    A Python dict (CONFIG) containing the exercise name, camera view,
-    client instructions, session duration, feedback mode, and optionally
-    the pose estimation backend selection. This file is generated from
-    the physiotherapist's configuration.
+2.1 Exercise Specification
 
-  analysis_module.py
-    LLM-generated Python module implementing a fixed API:
+A physiotherapist authors an exercise by providing the following inputs through
+a web-based configuration tool:
 
-      get_instructions() -> list[str]
-        Returns spoken instructions delivered to the patient at session start.
+  - Exercise name and camera orientation (frontal or lateral view).
+  - Patient instructions: natural-language text to be delivered verbally by
+    the robot at the start of each session.
+  - Boundary values: biomechanical thresholds specific to the exercise, expressed
+    in natural language or as numerical values. Examples include minimum required
+    knee flexion angle at the lowest point of a squat, acceptable range of trunk
+    lean, or symmetry tolerance between left and right limb angles.
+  - Session parameters: total exercise duration (in seconds) and feedback
+    timing policy (feedback delivered after each repetition, after the full
+    session, or both).
 
-      get_relevant_joints() -> list[tuple[str, str]]
-        Returns the joint angles to track, as (display_label, field_name) pairs.
+These inputs are stored persistently in a relational database alongside the
+exercise identity. The boundary values are intentionally left as free-form
+text rather than a rigid schema, allowing the physiotherapist to express
+conditions that vary substantially in nature across exercise types.
 
-      reset_round()
-        Resets internal state between exercise rounds.
+2.2 LLM-Based Code Generation
 
-      process_frame(pose_data: dict) -> dict
-        Called once per camera frame. Receives a dictionary of computed joint
-        angles and landmark coordinates. Returns a state dict containing:
-        rep count, feedback lines, rep cues, and phase information.
+The exercise specification is submitted to an LLM together with a structured
+system prompt. The prompt defines a fixed Python module API that the LLM must
+implement, describes the data contract (the structure of pose data provided
+per frame), and embeds the physiotherapist's boundary values and instructions
+as domain context. The LLM generates a complete Python source file
+(analysis_module.py) that encodes the exercise logic as executable code.
 
-    This module contains all exercise-specific rules and thresholds. It is the
-    only component that changes between exercises. All boundary conditions,
-    rep detection logic, and feedback generation are encoded here by the LLM.
+The generated module implements the following function interface:
 
-  run.py
-    Static entry point (same template for all exercises). Initialises the ROS
-    node, wires the pose engine to the session runner, and manages the main loop.
+  get_instructions() -> list[str]
+    Returns a list of instruction strings to be spoken to the patient
+    prior to exercise commencement.
 
+  get_relevant_joints() -> list[tuple[str, str]]
+    Returns the set of joint angles pertinent to the exercise, as pairs
+    of (display label, internal field name). These are used by the session
+    infrastructure to select which computed angles to make available to
+    the analysis logic at each frame.
 
-Static Infrastructure (platforms/qt/lib/)
-------------------------------------------
-The following components are shared across all exercises and are never
-regenerated. They form the fixed runtime layer on the robot.
+  reset_round()
+    Resets all internal module state between exercise rounds. The module
+    is permitted to maintain mutable state (e.g. angle history buffers,
+    repetition counters, phase trackers) as module-level variables.
 
-  session_runner.py
-    Implements a state machine with five phases:
-      instructions  -> plays spoken instructions, waits for TTS completion
-      calibration   -> verifies patient is correctly positioned in frame
-      countdown     -> 5-second countdown before exercise begins
-      exercise      -> active exercise window; delegates per-frame analysis
-                       to analysis_module.process_frame()
-      feedback      -> delivers rep or session feedback via TTS
+  process_frame(pose_data: dict) -> dict
+    The primary analysis function. Invoked once per camera frame during
+    the active exercise phase. Receives a dictionary mapping joint angle
+    field names to their current floating-point values, as computed from
+    the current frame's pose landmarks. Returns a result dictionary that
+    may contain the following keys:
 
-    The runner invokes the dynamic analysis module at each frame and translates
-    its output into state transitions, TTS cues, and display updates.
+      rep_detected (bool)   — whether a full repetition was completed
+                              on this frame
+      rep_count (int)       — cumulative repetition count for the round
+      rep_cue (str)         — optional short spoken movement cue
+                              (e.g. "down", "hold", "up")
+      feedback_lines (list) — list of feedback statements to be spoken
+                              and displayed at the end of a repetition
+                              or session; present only on the frame that
+                              triggers the feedback transition
+      phase (str)           — optional label for the current movement
+                              phase, used for display purposes
 
-  core/pose_engine.py
-    Subscribes to the ROS camera topic (/camera/color/image_raw), passes each
-    frame to the active pose backend, and distributes resulting PoseFrame objects
-    to registered subscribers via a callback queue.
+The LLM is responsible for translating the physiotherapist's boundary values
+into concrete conditional expressions within process_frame(). Typical patterns
+include threshold comparisons on individual joint angles to detect movement
+phases (e.g. flexion onset, maximum depth, extension return), temporal
+accumulation over a sliding window to distinguish held positions from
+transient fluctuations, and multi-joint constraint checks to assess postural
+quality. Feedback generation logic maps combinations of constraint violations
+to natural-language feedback strings that are biomechanically meaningful and
+patient-appropriate.
 
-  core/pose_backends.py
-    Pluggable pose estimation layer with two implementations:
-      MediaPipeBackend  — Google MediaPipe Pose; 33 landmarks
-      YOLOBackend       — Ultralytics YOLO pose; 17 COCO landmarks
-    The active backend is selected via the pose_backend key in exercise_config.py.
-    Both backends return normalised (x, y) landmark coordinates and a visibility
-    or confidence score per landmark.
+2.3 Validation and Package Generation
 
-  core/angle_calculator.py
-    Computes joint angles (knee, hip, shoulder, elbow, ankle) from landmark
-    coordinates using vector dot products. Angles are expressed in degrees.
-    Missing landmarks (e.g. when using the 17-keypoint YOLO model) produce
-    a zero value without raising an error.
+The generated analysis module is presented to the physiotherapist for review.
+Upon validation, the system automatically invokes the StandaloneGenerator
+component, which assembles a self-contained exercise package and writes it
+to the directory platforms/qt/<exercise_slug>/ within the project repository.
+The package consists of four files:
 
-  core/data_contract.py
-    Defines PoseFrame, a dataclass that carries a timestamp and one float
-    attribute per computed joint angle plus the raw keypoints dict.
+  exercise_config.py  — exercise metadata and session parameters (generated
+                        from the physiotherapist's configuration inputs)
+  analysis_module.py  — LLM-generated exercise logic (with a
+                        from __future__ import annotations header prepended
+                        automatically for Python 3.8 compatibility on ROS
+                        Noetic)
+  run.py              — static entry point shared by all exercises
+  __init__.py         — empty package marker
 
-  display.py
-    Manages the OpenCV window on the robot's screen. Renders the annotated
-    camera feed overlaid with session state, rep count, countdown, and
-    feedback text.
+2.4 Deployment
 
-  tts.py
-    Text-to-speech via the ROS service /qt_robot/speech/say. Provides both
-    non-blocking (speak) and blocking (speak_sync) calls used at different
-    points in the session state machine.
-
-
-Runtime Data Flow (per camera frame)
---------------------------------------
-  ROS camera topic
-    -> pose_engine.py receives raw BGR frame
-    -> pose backend (MediaPipe or YOLO) extracts landmark coordinates
-    -> angle_calculator.py computes joint angles
-    -> PoseFrame object constructed and passed to session_runner callback
-    -> session_runner.process_frame() calls analysis_module.process_frame()
-       with joint angle dict
-    -> analysis_module applies exercise-specific rules; returns rep state,
-       feedback lines, and any spoken cues
-    -> session_runner advances state machine accordingly
-    -> display.py renders annotated frame and session state to screen
-    -> tts.py speaks feedback or cues via QT robot speech service
+Exercise packages are managed under version control (Git). Deployment to the
+robot consists of pushing the updated repository to a shared remote and
+executing a pull on the robot. No compilation, installation, or service restart
+is required; the robot runs the exercise package directly as a Python script.
 
 
-Summary: Static vs. Dynamic Components
-----------------------------------------
-  Static (shared infrastructure, not exercise-specific):
-    pose_engine.py, pose_backends.py, angle_calculator.py,
-    data_contract.py, session_runner.py, display.py, tts.py, run.py
+3. Static Runtime Infrastructure
+----------------------------------
+The static layer resides in platforms/qt/lib/ and is shared across all
+exercises. It provides the fixed services — pose estimation, angle
+computation, session management, display, and speech — on top of which
+the dynamic analysis module executes.
+
+3.1 Pose Estimation
+
+Pose estimation is implemented as a pluggable backend layer. An abstract base
+class (PoseBackend) defines the interface: a process() method that accepts a
+raw BGR video frame and returns a dictionary of named landmark coordinates
+together with an annotated copy of the frame.
+
+Two concrete backends are provided:
+
+  MediaPipeBackend
+    Wraps Google MediaPipe Pose. Produces 33 landmarks covering the full
+    body including facial features, hand extremities, and foot indices.
+    Landmark coordinates are expressed as normalised values in [0, 1]
+    relative to frame dimensions, accompanied by a per-landmark visibility
+    score in [0, 1].
+
+  YOLOBackend
+    Wraps Ultralytics YOLO pose estimation. Produces 17 keypoints following
+    the COCO body keypoint convention (nose, eyes, ears, shoulders, elbows,
+    wrists, hips, knees, ankles). Coordinates are normalised in the same
+    convention as MediaPipe. A confidence threshold of 0.3 is applied;
+    keypoints below this threshold are excluded from the output dictionary.
+    Only the highest-confidence detected person per frame is processed.
+
+The active backend is specified by the pose_backend key in exercise_config.py
+(values: "mediapipe" or "yolo") and instantiated at startup via a factory
+function (create_backend). This allows the pose estimation method to be
+selected per exercise without modifying any infrastructure code.
+
+3.2 Pose Engine
+
+The PoseEngine component (core/pose_engine.py) manages the camera input and
+pose estimation lifecycle within the ROS environment. It subscribes to the
+/camera/color/image_raw ROS topic, which delivers frames from the robot's
+RGB camera. Each received frame is passed to the active pose backend.
+The resulting landmark dictionary and annotated frame are assembled into a
+PoseFrame data object (a typed dataclass defined in core/data_contract.py)
+and distributed to registered subscriber callbacks. A thread-safe queue of
+maximum size one is used to decouple frame production from downstream
+processing, ensuring that the subscriber always receives the most recent frame
+without accumulating a backlog.
+
+3.3 Joint Angle Computation
+
+The angle calculator (core/angle_calculator.py) operates on the landmark
+dictionary produced by the pose backend. It computes a set of clinically
+relevant joint angles — knee flexion/extension, hip flexion/extension,
+shoulder abduction, elbow flexion, and ankle dorsiflexion — bilaterally
+where applicable. Each angle is derived from the vectors formed by three
+landmarks defining the joint (proximal segment origin, joint centre, distal
+segment terminus) using the dot product formulation, yielding an angle in
+degrees. If any of the three required landmarks are absent from the dictionary
+(as may occur with the 17-keypoint YOLO model, which lacks heel and foot
+index landmarks), the corresponding angle defaults to zero without raising
+an error, allowing analysis modules to handle missing values gracefully.
+
+3.4 Session State Machine
+
+The SessionRunner (session_runner.py) implements a deterministic finite-state
+machine that governs the temporal structure of an exercise session. It operates
+over five sequential states:
+
+  instructions
+    The session opens with the robot delivering the patient instructions
+    produced by get_instructions(). The runner waits for TTS completion
+    before advancing.
+
+  calibration
+    The runner monitors incoming pose frames to verify that a patient is
+    visible and correctly positioned relative to the camera. Positioning
+    requirements (e.g. full body in frame, appropriate distance) are
+    assessed from landmark visibility scores. A spoken prompt guides the
+    patient into position.
+
+  countdown
+    A fixed five-second countdown is delivered via TTS and rendered on
+    the display, preparing the patient for exercise commencement.
+
+  exercise
+    The active exercise window. On each frame, the runner calls
+    analysis_module.process_frame() with the current joint angle
+    dictionary. It interprets the returned result to update the
+    repetition counter, issue spoken movement cues (rep_cue), and
+    detect when a feedback event should be triggered (rep_detected or
+    session end). The exercise window is bounded by the configured
+    session duration.
+
+  feedback
+    When a repetition or the session concludes, the runner transitions
+    to the feedback state. The feedback_lines returned by the analysis
+    module are delivered sequentially via TTS. For per-repetition
+    feedback, the runner returns to the exercise state upon completion.
+    For session-end feedback, the session terminates.
+
+3.5 Display
+
+The Display component (display.py) manages an OpenCV window rendered on the
+robot's integrated screen. It composites the annotated camera frame from the
+pose backend with session state overlays: current phase label, elapsed time
+or countdown value, repetition counter, and feedback text. During the feedback
+state, feedback lines are rendered as a text block overlaid on the frame.
+
+3.6 Text-to-Speech
+
+Speech output is provided through the ROS service interface exposed by the
+QT robot's speech subsystem (/qt_robot/speech/say). The tts module wraps
+this service with two calling conventions: a non-blocking call (speak) used
+for movement cues that should not interrupt the exercise flow, and a
+blocking call (speak_sync) used for instructions and feedback where the
+session must wait for the utterance to complete before proceeding.
+
+
+4. Runtime Data Flow
+---------------------
+The following describes the processing sequence executed for each camera frame
+during the active exercise phase:
+
+  (1) The ROS camera driver publishes a raw BGR frame to the
+      /camera/color/image_raw topic.
+
+  (2) PoseEngine receives the frame via its ROS subscriber callback.
+
+  (3) The frame is passed to the active pose backend (MediaPipe or YOLO),
+      which returns a dictionary of normalised landmark coordinates with
+      confidence scores, and an annotated copy of the frame with skeleton
+      overlay.
+
+  (4) The angle calculator processes the landmark dictionary to produce
+      a set of bilateral joint angles in degrees.
+
+  (5) A PoseFrame object is constructed, carrying the timestamp, computed
+      joint angles as typed attributes, and the raw landmark dictionary.
+
+  (6) The PoseFrame is dispatched to the SessionRunner callback.
+
+  (7) The SessionRunner extracts the subset of joint angle values specified
+      by get_relevant_joints() and calls analysis_module.process_frame()
+      with this dictionary.
+
+  (8) The analysis module applies its exercise-specific rules and thresholds,
+      updates its internal state, and returns a result dictionary.
+
+  (9) The SessionRunner interprets the result: increments the rep counter
+      if rep_detected is set, issues a spoken cue if rep_cue is present,
+      and triggers a state transition to the feedback phase if feedback_lines
+      are returned or the session duration has elapsed.
+
+  (10) The Display component renders the annotated frame together with the
+       current session state to the robot's screen.
+
+  (11) If a TTS event was triggered (cue or feedback), the tts module
+       dispatches the utterance to the QT robot's speech service.
+
+
+5. Static vs. Dynamic Component Summary
+-----------------------------------------
+The distinction between static and dynamic components is central to the
+system's extensibility. New exercises can be introduced purely by generating
+and deploying a new exercise package; the robot infrastructure requires
+no modification.
+
+  Static (shared across all exercises):
+    core/pose_engine.py       — ROS camera integration and frame dispatch
+    core/pose_backends.py     — MediaPipe and YOLO backend implementations
+    core/angle_calculator.py  — Joint angle computation from landmarks
+    core/data_contract.py     — PoseFrame data contract definition
+    session_runner.py         — Session state machine and lifecycle management
+    display.py                — Screen rendering and overlay composition
+    tts.py                    — ROS text-to-speech service wrapper
+    run.py                    — Exercise entry point and ROS node initialisation
 
   Dynamic (generated per exercise by the LLM):
-    analysis_module.py  — all exercise rules, thresholds, rep detection logic
+    analysis_module.py        — Exercise-specific movement rules, repetition
+                                detection logic, and feedback generation,
+                                encoding the physiotherapist's boundary values
 
   Configuration (generated per exercise from physiotherapist input):
-    exercise_config.py  — exercise metadata, session parameters, backend choice
+    exercise_config.py        — Exercise metadata, session parameters,
+                                and pose backend selection
