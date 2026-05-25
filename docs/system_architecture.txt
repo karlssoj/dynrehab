@@ -43,20 +43,53 @@ a web-based configuration tool:
   - Session parameters: total exercise duration (in seconds) and feedback
     timing policy (feedback delivered after each repetition, after the full
     session, or both).
+  - Reference video: an optional video recording of the physiotherapist
+    demonstrating the correct execution of the exercise. This recording is
+    used during prompt construction as described in section 2.2.
 
 These inputs are stored persistently in a relational database alongside the
 exercise identity. The boundary values are intentionally left as free-form
 text rather than a rigid schema, allowing the physiotherapist to express
 conditions that vary substantially in nature across exercise types.
 
-2.2 LLM-Based Code Generation
+2.2 Reference Video Analysis
 
-The exercise specification is submitted to an LLM together with a structured
-system prompt. The prompt defines a fixed Python module API that the LLM must
-implement, describes the data contract (the structure of pose data provided
-per frame), and embeds the physiotherapist's boundary values and instructions
-as domain context. The LLM generates a complete Python source file
-(analysis_module.py) that encodes the exercise logic as executable code.
+When a reference video is provided, it is processed by a video analyser
+component (core/video_analyzer.py) prior to prompt construction. The analyser
+runs the same pose estimation pipeline used during live sessions — landmark
+extraction followed by joint angle computation — on every frame of the
+recorded video. The resulting per-frame angle measurements are reduced to a
+set of joint-level statistics: the observed minimum, maximum, and range of
+each angle across the full recording. These statistics are sorted by range in
+descending order, yielding a ranked list of the joints most actively involved
+in the demonstrated movement.
+
+Importantly, joints with a suspiciously small range of motion are flagged
+with a warning, indicating that the demonstration did not exhibit the full
+movement arc for that joint. In such cases the prompt instructs the LLM to
+disregard the reference data for that joint and instead apply established
+clinical defaults for the exercise type.
+
+The reference video itself is never transmitted to the LLM. Only the derived
+numerical statistics are included in the prompt. If no reference video has
+been recorded for an exercise, this analysis stage is skipped entirely and
+the corresponding section is omitted from the prompt.
+
+2.3 LLM-Based Code Generation
+
+The exercise specification, together with the reference video statistics when
+available, is submitted to an LLM together with a structured system prompt.
+The prompt defines a fixed Python module API that the LLM must implement,
+describes the complete set of pose data fields available at runtime (joint
+angles, segment-from-vertical angles, bilateral tilt angles, signed valgus
+angles, and raw landmark keypoints), and embeds the physiotherapist's boundary
+values and instructions as domain context. When reference video statistics are
+present, the prompt includes a calibration section that derives recommended
+detection thresholds directly from the observed angle ranges, instructing the
+LLM to set movement-onset thresholds at approximately 30% of the observed
+range and full-repetition thresholds at approximately 60% of the range. The
+LLM generates a complete Python source file (analysis_module.py) that encodes
+the exercise logic as executable code.
 
 The generated module implements the following function interface:
 
@@ -130,7 +163,7 @@ quality across the frames of a repetition. Feedback generation logic maps
 combinations of accumulated constraint violations to natural-language feedback
 strings that are biomechanically meaningful and patient-appropriate.
 
-2.3 Validation and Package Generation
+2.4 Validation and Package Generation
 
 The generated analysis module is presented to the physiotherapist for review.
 Upon validation, the system automatically invokes the StandaloneGenerator
@@ -147,7 +180,7 @@ The package consists of four files:
   run.py              — static entry point shared by all exercises
   __init__.py         — empty package marker
 
-2.4 Deployment
+2.5 Deployment
 
 Exercise packages are managed under version control (Git). Deployment to the
 robot consists of pushing the updated repository to a shared remote and
@@ -340,6 +373,7 @@ no modification.
     core/pose_backends.py     — MediaPipe and YOLO backend implementations
     core/angle_calculator.py  — Joint angle computation from landmarks
     core/data_contract.py     — PoseFrame data contract definition
+    core/video_analyzer.py    — Reference video pose analysis for prompt calibration
     session_runner.py         — Session state machine and lifecycle management
     display.py                — Screen rendering and overlay composition
     tts.py                    — ROS text-to-speech service wrapper
