@@ -1,0 +1,118 @@
+Squat From Side — Movement Analysis Rules (Pseudocode)
+=======================================================
+
+Exercise: Squat from side (lateral camera view)
+Primary measurement: knee bend angle  (0° = standing straight, ~90° = deep squat)
+
+
+------------------------------------------------------------------------
+SECTION 1 — REPETITION DETECTION  (runs every camera frame)
+------------------------------------------------------------------------
+
+State machine with two phases: READY and MOVING
+
+  READY phase:
+    IF knee bend exceeds 30°
+      → switch to MOVING phase
+
+  MOVING phase:
+    IF knee bend returns below 15°
+      → switch back to READY phase
+      → count this as a completed repetition
+
+Key point: any movement that crosses both thresholds counts as a rep,
+regardless of quality. Depth and form are assessed separately in feedback.
+
+
+------------------------------------------------------------------------
+SECTION 2 — PER-REP FEEDBACK  (spoken after each repetition)
+------------------------------------------------------------------------
+
+Always open with: "Rep N done."
+
+Then check the following, IN ORDER OF PRIORITY:
+
+  CHECK 1 — Heel rise  (highest priority: injury risk)
+    Look at frames where the knee was meaningfully bent (bend > 20°).
+    Measure how much the heel lifted off the ground.
+    IF heel rise > ~5 cm
+      → "Your heels lifted off the floor — focus on keeping them flat
+         as you squat down."
+
+  CHECK 2 — Knees too far forward
+    Measure the average shin angle from vertical during the bent phase.
+    IF average shin angle > 30°
+      → "Your knees are travelling too far over your toes — push your
+         hips back and keep your shins more vertical."
+
+  CHECK 3 — Squat depth
+    Find the maximum knee bend reached during the rep.
+    IF maximum knee bend < 60°
+      → "Try to squat a little deeper — aim to get your thighs closer
+         to parallel with the floor."
+    IF maximum knee bend ≥ 90°
+      → "Great depth — you reached a full ninety-degree squat."
+    (Between 60° and 90°: no comment on depth.)
+
+  CHECK 4 — Torso lean
+    Measure the average forward lean of the trunk across all frames.
+    IF average trunk lean > 45°
+      → "You are leaning too far forward with your torso — try to keep
+         your chest more upright throughout the movement."
+
+  CHECK 5 — Shoulder drift
+    Track how much the shoulder moves horizontally across the rep.
+    IF horizontal shoulder movement > 15% of frame width
+      → "Your shoulders are drifting forward — try to move more
+         vertically and keep your weight centred."
+
+  If none of the above issues were detected:
+    → "Excellent form — keep up the controlled movement."
+
+
+------------------------------------------------------------------------
+SECTION 3 — SESSION SUMMARY  (spoken once at the end)
+------------------------------------------------------------------------
+
+IF no reps were completed:
+  → "No reps were completed this session."
+  → Give guidance on what to do next time.
+  → Stop here.
+
+Otherwise:
+  → "You completed N squats in total — well done."
+
+  DEPTH PROGRESSION (compare first round vs last round):
+    IF last round depth > first round depth by more than 10°
+      → "Your squat depth improved as the session progressed."
+    IF first round depth > last round depth by more than 10°
+      → "Your depth was best in round 1 and decreased toward the end
+         — this may be fatigue."
+    IF every round reached ≥ 90° knee bend
+      → "You maintained excellent squat depth in every round."
+    IF every round stayed below 90° knee bend
+      → "Your squat depth was a little shallow across all rounds."
+
+  PERSISTENT ISSUES (check which rounds flagged each problem):
+
+    Heel rise:
+      IF flagged in every round
+        → "Heel rise was noted in every round — work on ankle mobility."
+      ELSE IF flagged in some rounds
+        → "Heel lifting was detected in round X and round Y."
+
+    Knees too far forward:
+      IF flagged in every round
+        → "Your knees consistently travelled too far over your toes."
+      ELSE IF flagged in some rounds
+        → "Knee forward travel was an issue in round X."
+
+    Excessive torso lean:
+      IF flagged in every round
+        → "Excessive forward lean appeared throughout the session."
+      ELSE IF flagged in some rounds
+        → "Torso lean was too far forward in round X."
+
+  IF none of the above issues appeared in any round:
+    → "Your form was consistent across the session — keep up the
+       excellent work."
