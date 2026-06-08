@@ -572,20 +572,21 @@ def generate_round_feedback(round_data: dict) -> list[str]:
         parts.append("""\
 def generate_rep_feedback(rep_data: dict) -> list[str]:
     # REQUIRED (after_rep mode). Called once after each completed rep.
-    # Exercise is paused while this feedback is spoken — give a full per-rep critique.
+    # Exercise is paused while this feedback is spoken — give a complete per-rep critique.
     # rep_data: {
     #   "rep_number": int,      # total reps completed so far (1-indexed)
     #   "round_number": int,    # current round number
     #   "frames": list[dict]    # recent pose frames (last ~2 seconds)
     # }
-    # Return a list of spoken sentences. 2-4 sentences — brief but complete.
+    # Return a list of spoken sentences — one sentence per issue found (no limit).
     # - Open with a short rep acknowledgment (e.g., "Rep 3 done.").
-    # - Cover the most important quality dimension first (depth, alignment, posture).
+    # - Report ALL quality dimensions that showed a problem in these frames.
+    #   Use a separate if statement per check — do NOT use elif.
+    #   Every check that fails must produce its own feedback sentence.
+    #   Do NOT skip issues because a higher-priority issue was already found.
     # - Give a corrective cue only if an issue was clearly present in these frames.
     # - If no issues: give brief encouragement and one positive observation.
     # - NEVER report raw angle values unless instructions explicitly request them.
-    # - Severity order same as generate_rep_cue: injury risk > depth > posture.
-    # - Use separate if statements (NOT elif) for independent quality checks.
 """)
 
     if "after_exercise" in modes:

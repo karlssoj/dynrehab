@@ -30,9 +30,11 @@ SECTION 2 — PER-REP FEEDBACK  (spoken after each repetition)
 
 Always open with: "Rep N done."
 
-Then check the following, IN ORDER OF PRIORITY:
+Then evaluate ALL of the following checks independently.
+Every check that fails produces its own spoken sentence — no check is
+skipped because another issue was already found.
 
-  CHECK 1 — Heel rise  (highest priority: injury risk)
+  CHECK 1 — Heel rise
     Look at frames where the knee was meaningfully bent (bend > 20°).
     Measure how much the heel lifted off the ground.
     IF heel rise > ~5 cm
@@ -66,7 +68,7 @@ Then check the following, IN ORDER OF PRIORITY:
       → "Your shoulders are drifting forward — try to move more
          vertically and keep your weight centred."
 
-  If none of the above issues were detected:
+  If none of the above checks triggered:
     → "Excellent form — keep up the controlled movement."
 
 
