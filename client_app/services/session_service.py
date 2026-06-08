@@ -238,12 +238,23 @@ class SessionService:
                     result["rep_cue"] = cue
                     self._rep_cues.append(cue)
 
-            if self._state == "exercise" and elapsed >= self._exercise_secs and "after_window" in self._feedback_mode:
-                feedback = self._enter_feedback()
-                result["feedback_lines"] = feedback
-                result["time_remaining"] = 0.0
-                result["state"] = "feedback"
-                self._feedback_emitted = True
+            if self._state == "exercise" and elapsed >= self._exercise_secs:
+                if "after_window" in self._feedback_mode:
+                    feedback = self._enter_feedback()
+                    result["feedback_lines"] = feedback
+                    result["time_remaining"] = 0.0
+                    result["state"] = "feedback"
+                    self._feedback_emitted = True
+                else:
+                    self._all_rounds.append({
+                        "round_number": self._round_number,
+                        "rep_count": self._round_rep_count,
+                        "frames": list(self._round_frames),
+                        "duration_seconds": self._exercise_secs,
+                    })
+                    self._state = "done"
+                    result["state"] = "done"
+                    result["time_remaining"] = 0.0
 
         elif self._state == "feedback":
             if not self._feedback_emitted:

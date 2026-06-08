@@ -29,6 +29,7 @@ class SessionViewFrame(ctk.CTkFrame):
         self._exercise_secs: int = 0   # set properly in _start_session
         self._feedback_mode: list[str] = ["after_window"]
         self._last_rep_cue_time: float = 0.0
+        self._done_handled: bool = False
         self._build()
         self._start_session()
 
@@ -222,6 +223,21 @@ class SessionViewFrame(ctk.CTkFrame):
             elapsed = self._exercise_secs - time_left
             bar_width = int(min(1.0, elapsed / self._exercise_secs) * w)
             cv2.rectangle(display, (0, h - 8), (bar_width, h), (0, 200, 255), -1)
+
+        if state == "done" and not self._done_handled:
+            self._done_handled = True
+            if self._engine:
+                self._engine.stop()
+                self._engine.unsubscribe(self._on_frame)
+            if "after_exercise" in self._feedback_mode:
+                summary_lines = self._session.get_session_summary_speech()
+                if summary_lines:
+                    self._show_summary_panel(summary_lines)
+                    self._tts.speak_immediate(". ".join(summary_lines))
+                    self._wait_for_summary_then_home()
+                    return
+            self.app.show_launcher()
+            return
 
         calibration_speak = result.get("calibration_speak")
         if calibration_speak:
