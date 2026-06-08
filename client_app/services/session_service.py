@@ -71,6 +71,7 @@ class SessionService:
         self._last_cue_time: float = 0.0
         self._rep_cues: list[str] = []
         self._round_feedback_history: list[list[str]] = []
+        self._rep_snapshots: list[dict] = []
         self._calibration_last_speak: float = 0.0
         self._calibration_ready_since: float = 0.0
         self._feedback_type: str = "window"  # "window" | "rep"
@@ -301,11 +302,18 @@ class SessionService:
         self._feedback_type = "rep"
         self._state = "feedback"
         self._state_wall_start = time.time()
+        rep_frames = list(self._round_frames[-60:])
         rep_data = {
             "rep_number": self.rep_count,
             "round_number": self._round_number,
-            "frames": list(self._round_frames[-60:]),
+            "frames": rep_frames,
         }
+        self._rep_snapshots.append({
+            "round_number": self.rep_count,
+            "rep_count": 1,
+            "frames": rep_frames,
+            "duration_seconds": 0.0,
+        })
         try:
             lines = self._generate_rep_feedback(rep_data) if self._generate_rep_feedback else None
             lines = list(lines) if lines else ["Good rep, keep going!"]
@@ -394,10 +402,14 @@ class SessionService:
     def get_session_summary_speech(self) -> list[str]:
         if not self._get_session_summary:
             return []
+        # For after_rep mode, pass per-rep snapshots as rounds so the summary
+        # function can compare movement quality across individual repetitions.
+        rounds = (self._rep_snapshots if self._rep_snapshots
+                  else list(self._all_rounds))
         session_data = {
             "total_reps": self.rep_count,
             "total_duration_seconds": time.time() - self._started_at,
-            "rounds": list(self._all_rounds),
+            "rounds": rounds,
             "rep_cues": list(self._rep_cues),
             "round_feedback": list(self._round_feedback_history),
             "angle_stats": dict(self._angle_stats),
