@@ -58,3 +58,37 @@ def crop_and_rotate_roi(frame: np.ndarray, hip_px: tuple[float, float],
     hip_point = (out_w / 2.0, out_h / 2.0 + chord_len / 2.0)
     shoulder_point = (out_w / 2.0, out_h / 2.0 - chord_len / 2.0)
     return rotated, hip_point, shoulder_point, chord_len
+
+
+def extract_back_contour(mask: np.ndarray, hip_point: tuple[float, float],
+                          shoulder_point: tuple[float, float]
+                          ) -> tuple[list[float], list[float]] | None:
+    """Scan each row between shoulder and hip for the mask's edge distance on
+    each side of the vertical centerline (x = hip_point[0] ==
+    shoulder_point[0]). Returns (left_profile, right_profile), or None if
+    fewer than 3 rows have the centerline inside the mask."""
+    center_x = int(round(hip_point[0]))
+    y_start = int(round(shoulder_point[1]))
+    y_end = int(round(hip_point[1]))
+    h, w = mask.shape[:2]
+
+    left_profile: list[float] = []
+    right_profile: list[float] = []
+    for y in range(max(0, y_start), min(h, y_end + 1)):
+        row = mask[y]
+        if center_x < 0 or center_x >= w or row[center_x] == 0:
+            continue
+
+        x = center_x
+        while x > 0 and row[x] > 0:
+            x -= 1
+        left_profile.append(float(center_x - x))
+
+        x = center_x
+        while x < w - 1 and row[x] > 0:
+            x += 1
+        right_profile.append(float(x - center_x))
+
+    if len(left_profile) < 3:
+        return None
+    return left_profile, right_profile

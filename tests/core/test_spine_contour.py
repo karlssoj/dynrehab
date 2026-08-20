@@ -2,7 +2,7 @@ import pytest
 import numpy as np
 import cv2
 
-from core.spine_contour import facing_left, crop_and_rotate_roi, _MIN_CHORD_PX, _ROI_MARGIN_FRAC, _ROI_END_PAD_FRAC
+from core.spine_contour import facing_left, crop_and_rotate_roi, extract_back_contour, _MIN_CHORD_PX, _ROI_MARGIN_FRAC, _ROI_END_PAD_FRAC
 
 
 def test_facing_left_true_when_nose_left_of_shoulder():
@@ -111,3 +111,37 @@ def test_crop_and_rotate_roi_at_min_chord_boundary_is_not_none():
     assert result is not None
     _, _, _, chord_len = result
     assert chord_len == pytest.approx(_MIN_CHORD_PX, abs=0.01)
+
+
+def _make_straight_mask(width=100, height=100, half_width=20, center_x=50):
+    mask = np.zeros((height, width), dtype=np.uint8)
+    mask[:, center_x - half_width:center_x + half_width] = 255
+    return mask
+
+
+def test_extract_back_contour_straight_mask_gives_constant_profiles():
+    mask = _make_straight_mask()
+    hip_point = (50.0, 90.0)
+    shoulder_point = (50.0, 10.0)
+    result = extract_back_contour(mask, hip_point, shoulder_point)
+    assert result is not None
+    left_profile, right_profile = result
+    assert len(left_profile) == len(right_profile) == 81
+    assert all(v == pytest.approx(20, abs=1) for v in left_profile)
+    assert all(v == pytest.approx(20, abs=1) for v in right_profile)
+
+
+def test_extract_back_contour_bulge_on_right_side():
+    mask = _make_straight_mask()
+    mask[40:60, 70:85] = 255  # bulge outward on the right side, middle rows
+    hip_point = (50.0, 90.0)
+    shoulder_point = (50.0, 10.0)
+    left_profile, right_profile = extract_back_contour(mask, hip_point, shoulder_point)
+    assert max(right_profile[30:50]) > 20  # rows 40-59 -> indices 30-49 (offset by shoulder_point y=10)
+    assert all(v == pytest.approx(20, abs=1) for v in left_profile)
+
+
+def test_extract_back_contour_returns_none_for_empty_mask():
+    mask = np.zeros((100, 100), dtype=np.uint8)
+    result = extract_back_contour(mask, (50.0, 90.0), (50.0, 10.0))
+    assert result is None
