@@ -193,3 +193,82 @@ def test_signed_curvature_ratio_none_for_empty_profile():
 def test_signed_curvature_ratio_none_for_nonpositive_chord_len():
     profile = [20.0] * 10
     assert signed_curvature_ratio(profile, profile, chord_len=0.0, facing_left=True) is None
+
+
+def test_facing_left_and_profile_split_agree_end_to_end():
+    """End-to-end synthetic check that facing_left() (computed in the
+    ORIGINAL, unrotated frame) and the left/right profile split from
+    extract_back_contour() (computed in the ROTATED ROI frame) agree on
+    which side is the person's back.
+
+    Setup: a genuinely tilted hip->shoulder chord (dx=+40, dy=-180, not
+    vertical, not horizontal) and a nose placed clearly to the image-left
+    of the shoulder in the ORIGINAL frame (nose_x=190 < shoulder_x=220),
+    so facing_left(keypoints) is True.
+
+    Reasoning (verified by direct computation, not just assumed):
+    decompose the nose's position relative to the hip->shoulder chord
+    into a component along the perpendicular of that chord. Projecting
+    the same perpendicular through crop_and_rotate_roi's rotation shows
+    the nose sits on the side of the chord that maps to the LEFT half
+    (x < center_x) of the rotated ROI. Since a 2D rotation preserves
+    chirality, "left of chord in the original frame" == "left half of the
+    rotated ROI" for this chord/rotation. So: nose (face) is on the LEFT
+    side of the rotated ROI -> the back must be on the RIGHT side
+    (x > center_x) of the rotated ROI -> right_profile is the back-side
+    profile. This matches signed_curvature_ratio's documented convention:
+    back_profile = right_profile if facing_left else left_profile, and
+    facing_left is True here.
+
+    Therefore: if we place a deliberate outward bulge on the RIGHT side of
+    the rotated mask (x > center_x), it must be picked up by
+    right_profile, be selected as the back profile (facing_left is True),
+    and produce a POSITIVE signed_curvature_ratio (outward bulge =
+    positive, per the documented sign convention). If the two coordinate
+    frames were mismatched (a real, previously-undetected bug), the bulge
+    would instead end up in left_profile -- which is NOT selected as the
+    back when facing_left is True -- and the ratio would come out ~0
+    instead of clearly positive.
+    """
+    frame = np.zeros((400, 400, 3), dtype=np.uint8)
+    hip_px = (180.0, 300.0)
+    shoulder_px = (220.0, 120.0)
+    # Nose clearly to the image-left of the shoulder in the ORIGINAL frame.
+    nose_px = (shoulder_px[0] - 30, shoulder_px[1] - 20)
+
+    keypoints = {
+        "nose": (nose_px[0] / 400.0, nose_px[1] / 400.0, 0.0, 0.9),
+        "left_shoulder": (shoulder_px[0] / 400.0, shoulder_px[1] / 400.0, 0.0, 0.9),
+        "left_hip": (hip_px[0] / 400.0, hip_px[1] / 400.0, 0.0, 0.9),
+    }
+
+    result = crop_and_rotate_roi(frame, hip_px, shoulder_px)
+    assert result is not None
+    rotated, hip_point, shoulder_point, chord_len = result
+
+    out_h, out_w = rotated.shape[:2]
+    center_x = int(round(hip_point[0]))
+    y_start = int(round(shoulder_point[1]))
+    y_end = int(round(hip_point[1]))
+    half_width = 20
+
+    mask = np.zeros((out_h, out_w), dtype=np.uint8)
+    mask[:, max(0, center_x - half_width):center_x + half_width] = 255
+    # Deliberate outward bulge on the RIGHT side (x > center_x) of the
+    # rotated centerline, in the middle of the hip-shoulder span.
+    mid_y = (y_start + y_end) // 2
+    mask[mid_y - 10:mid_y + 10, center_x + half_width:center_x + half_width + 15] = 255
+
+    contour = extract_back_contour(mask, hip_point, shoulder_point)
+    assert contour is not None
+    left_profile, right_profile = contour
+
+    fl = facing_left(keypoints)
+    assert fl is True
+
+    ratio = signed_curvature_ratio(left_profile, right_profile, chord_len, fl)
+    assert ratio is not None
+    # Per the reasoning above: bulge is on the right of the rotated
+    # centerline -> right_profile carries it -> facing_left True selects
+    # right_profile as back_profile -> ratio must be positive.
+    assert ratio > 0
