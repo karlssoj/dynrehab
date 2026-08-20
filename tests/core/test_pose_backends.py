@@ -142,3 +142,54 @@ def test_never_confident_keypoint_omitted(monkeypatch):
 
     assert "nose" not in keypoints
     assert "left_eye" in keypoints
+
+
+def test_default_get_segmentation_mask_returns_none():
+    from core.pose_backends import PoseBackend
+
+    class _DummyBackend(PoseBackend):
+        def process(self, frame, highlight_joints=frozenset()):
+            return {}, frame
+
+        def close(self):
+            pass
+
+    backend = _DummyBackend()
+    assert backend.get_segmentation_mask(np.zeros((10, 10, 3), dtype=np.uint8)) is None
+
+
+def test_yolo_get_segmentation_mask_returns_resized_binary_mask(monkeypatch):
+    model = MagicMock()
+    mask_source = np.zeros((160, 160), dtype=np.float32)
+    mask_source[40:120, 40:120] = 1.0
+
+    masks = MagicMock()
+    masks.data = MagicMock()
+    masks.data.shape = (1,)
+    single_mask = MagicMock()
+    single_mask.cpu.return_value.numpy.return_value = mask_source
+    masks.data.__getitem__ = MagicMock(return_value=single_mask)
+
+    result = MagicMock()
+    result.masks = masks
+    model.return_value = [result]
+
+    backend = _make_backend(monkeypatch, model)
+    roi = np.zeros((80, 80, 3), dtype=np.uint8)
+    mask = backend.get_segmentation_mask(roi)
+
+    assert mask is not None
+    assert mask.shape == (80, 80)
+    assert mask.dtype == np.uint8
+    assert mask.max() == 255
+
+
+def test_yolo_get_segmentation_mask_returns_none_when_no_mask(monkeypatch):
+    model = MagicMock()
+    result = MagicMock()
+    result.masks = None
+    model.return_value = [result]
+
+    backend = _make_backend(monkeypatch, model)
+    roi = np.zeros((80, 80, 3), dtype=np.uint8)
+    assert backend.get_segmentation_mask(roi) is None

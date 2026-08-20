@@ -50,6 +50,14 @@ class PoseBackend(ABC):
     def close(self) -> None:
         """Release backend resources."""
 
+    def get_segmentation_mask(self, roi_image: np.ndarray) -> np.ndarray | None:
+        """roi_image: an already-cropped BGR image (e.g. the rotated torso
+        ROI from spine_contour.crop_and_rotate_roi). Returns a binary mask
+        (uint8, 0/255) the same size as roi_image, or None if this backend
+        doesn't support segmentation or no person/mask is found. Default:
+        unsupported."""
+        return None
+
 
 class MediaPipeBackend(PoseBackend):
     _LANDMARK_NAMES = {
@@ -139,7 +147,8 @@ class YOLOBackend(PoseBackend):
                  min_cutoff: float = _DEFAULT_MIN_CUTOFF,
                  beta: float = _DEFAULT_BETA,
                  d_cutoff: float = _DEFAULT_D_CUTOFF,
-                 hold_max_seconds: float = _DEFAULT_HOLD_MAX_SECONDS):
+                 hold_max_seconds: float = _DEFAULT_HOLD_MAX_SECONDS,
+                 seg_model_path: str = "yolo11n-seg.pt"):
         from ultralytics import YOLO
         self._model = YOLO(model_path)
         self._min_cutoff = min_cutoff
@@ -147,6 +156,8 @@ class YOLOBackend(PoseBackend):
         self._d_cutoff = d_cutoff
         self._hold_max_seconds = hold_max_seconds
         self._filter_state: dict[str, _KeypointState] = {}
+        self._seg_model_path = seg_model_path
+        self._seg_model = None
 
     def process(self, frame: np.ndarray,
                 highlight_joints: frozenset = frozenset()) -> tuple[dict, np.ndarray]:
@@ -194,6 +205,20 @@ class YOLOBackend(PoseBackend):
             return keypoints, _draw_skeleton(annotated, keypoints, highlight_joints)
 
         return {}, annotated
+
+    def get_segmentation_mask(self, roi_image: np.ndarray) -> np.ndarray | None:
+        if self._seg_model is None:
+            from ultralytics import YOLO
+            self._seg_model = YOLO(self._seg_model_path)
+        results = self._seg_model(roi_image, verbose=False, imgsz=320)
+        for r in results:
+            if r.masks is None or r.masks.data.shape[0] == 0:
+                return None
+            mask = r.masks.data[0].cpu().numpy()
+            mask_u8 = (mask > 0.5).astype("uint8") * 255
+            return cv2.resize(mask_u8, (roi_image.shape[1], roi_image.shape[0]),
+                               interpolation=cv2.INTER_NEAREST)
+        return None
 
     def close(self) -> None:
         pass
