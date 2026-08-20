@@ -46,8 +46,8 @@ def crop_and_rotate_roi(frame: np.ndarray, hip_px: tuple[float, float],
     mid_x = (hip_x + shoulder_x) / 2.0
     mid_y = (hip_y + shoulder_y) / 2.0
 
-    out_w = int(round(chord_len * (1 + 2 * _ROI_MARGIN_FRAC)))
-    out_h = int(round(chord_len * (1 + 2 * _ROI_END_PAD_FRAC)))
+    out_w = round(chord_len * (1 + 2 * _ROI_MARGIN_FRAC))
+    out_h = round(chord_len * (1 + 2 * _ROI_END_PAD_FRAC))
 
     M = cv2.getRotationMatrix2D((mid_x, mid_y), angle_deg, 1.0)
     M[0, 2] += out_w / 2.0 - mid_x

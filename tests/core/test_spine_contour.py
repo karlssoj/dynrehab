@@ -78,3 +78,36 @@ def test_crop_and_rotate_roi_marker_lands_at_hip_point():
     region = rotated[int(hip_point[1]) - 4:int(hip_point[1]) + 4,
                       int(hip_point[0]) - 4:int(hip_point[0]) + 4]
     assert region.max() > 200
+
+
+def test_crop_and_rotate_roi_both_markers_land_at_expected_points_for_tilted_chord():
+    # A genuinely tilted chord (dx != 0 and dy != 0), with markers stamped at
+    # both the hip and shoulder source points. This exercises the actual
+    # rotation direction against real pixel content -- a flipped rotation
+    # sign would miss both markers even though the arithmetic hip_point /
+    # shoulder_point values are unchanged.
+    frame = np.zeros((400, 400, 3), dtype=np.uint8)
+    hip_px = (150.0, 300.0)
+    shoulder_px = (250.0, 150.0)  # tilted chord
+    cv2.circle(frame, (int(hip_px[0]), int(hip_px[1])), 3, (255, 255, 255), -1)
+    cv2.circle(frame, (int(shoulder_px[0]), int(shoulder_px[1])), 3, (255, 255, 255), -1)
+    result = crop_and_rotate_roi(frame, hip_px, shoulder_px)
+    assert result is not None
+    rotated, hip_point, shoulder_point, chord_len = result
+
+    hip_region = rotated[int(hip_point[1]) - 4:int(hip_point[1]) + 4,
+                          int(hip_point[0]) - 4:int(hip_point[0]) + 4]
+    shoulder_region = rotated[int(shoulder_point[1]) - 4:int(shoulder_point[1]) + 4,
+                               int(shoulder_point[0]) - 4:int(shoulder_point[0]) + 4]
+    assert hip_region.max() > 200
+    assert shoulder_region.max() > 200
+
+
+def test_crop_and_rotate_roi_at_min_chord_boundary_is_not_none():
+    frame = np.zeros((200, 200, 3), dtype=np.uint8)
+    hip_px = (100.0, 100.0)
+    shoulder_px = (100.0, 100.0 + _MIN_CHORD_PX)  # exactly at the boundary
+    result = crop_and_rotate_roi(frame, hip_px, shoulder_px)
+    assert result is not None
+    _, _, _, chord_len = result
+    assert chord_len == pytest.approx(_MIN_CHORD_PX, abs=0.01)
