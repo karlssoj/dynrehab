@@ -1,3 +1,4 @@
+import os
 import threading
 import time
 from typing import Callable
@@ -24,6 +25,9 @@ LANDMARK_NAMES = {
 }
 
 _SPINE_SAMPLE_INTERVAL_SECS = 0.25  # 4 Hz — see spec's measured performance baseline
+# Override via the SPINE_SAMPLE_INTERVAL_SECS env var (e.g. in .env) — a
+# smaller value samples more often (updates the drawn contour faster) at
+# the cost of more CPU load per second; a larger value reduces load.
 
 
 def _should_sample_spine(last_sample_time: float, now: float,
@@ -42,6 +46,8 @@ class PoseEngine:
         self._seek_start = False
         self._last_spine_sample = 0.0
         self._last_spine_points: list[tuple[float, float]] | None = None
+        self._spine_sample_interval = float(
+            os.getenv("SPINE_SAMPLE_INTERVAL_SECS", _SPINE_SAMPLE_INTERVAL_SECS))
 
     def seek_to_start(self):
         with self._lock:
@@ -102,7 +108,8 @@ class PoseEngine:
                         setattr(pose_frame, k, v)
                     pose_frame.keypoints = keypoints
 
-                    if _should_sample_spine(self._last_spine_sample, frame_start):
+                    if _should_sample_spine(self._last_spine_sample, frame_start,
+                                             self._spine_sample_interval):
                         self._last_spine_sample = frame_start
                         try:
                             hip = keypoints.get("left_hip") or keypoints.get("right_hip")

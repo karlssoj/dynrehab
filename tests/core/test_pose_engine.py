@@ -1,3 +1,4 @@
+import pytest
 import numpy as np
 from unittest.mock import MagicMock
 
@@ -146,3 +147,15 @@ def test_run_persists_back_contour_drawing_between_samples(mocker):
     assert received[1][0].spine_curvature_ratio is None  # not re-sampled this tick
     assert received[0][1].max() > 0
     assert received[1][1].max() > 0  # still drawn, from the cached points
+
+
+def test_spine_sample_interval_defaults_to_constant(monkeypatch):
+    monkeypatch.delenv("SPINE_SAMPLE_INTERVAL_SECS", raising=False)
+    engine = PoseEngine(backend=_RaisingSegBackend())
+    assert engine._spine_sample_interval == _SPINE_SAMPLE_INTERVAL_SECS
+
+
+def test_spine_sample_interval_reads_from_env(monkeypatch):
+    monkeypatch.setenv("SPINE_SAMPLE_INTERVAL_SECS", "0.05")
+    engine = PoseEngine(backend=_RaisingSegBackend())
+    assert engine._spine_sample_interval == pytest.approx(0.05)
