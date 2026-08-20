@@ -6,6 +6,8 @@ import numpy as np
 from core.data_contract import PoseFrame
 from core.angle_calculator import calculate_angles
 from core.pose_backends import POSE_CONNECTIONS, PoseBackend, MediaPipeBackend
+from core.spine_contour import (crop_and_rotate_roi, extract_back_contour,
+                                 signed_curvature_ratio, facing_left)
 
 # Kept for backwards compatibility — callers that imported LANDMARK_NAMES from here still work.
 LANDMARK_NAMES = {
@@ -20,6 +22,13 @@ LANDMARK_NAMES = {
     31: "left_foot_index", 32: "right_foot_index",
 }
 
+_SPINE_SAMPLE_INTERVAL_SECS = 0.25  # 4 Hz — see spec's measured performance baseline
+
+
+def _should_sample_spine(last_sample_time: float, now: float,
+                          interval: float = _SPINE_SAMPLE_INTERVAL_SECS) -> bool:
+    return now - last_sample_time >= interval
+
 
 class PoseEngine:
     def __init__(self, backend: PoseBackend = None):
@@ -30,6 +39,7 @@ class PoseEngine:
         self._highlight_joints: set[str] = set()
         self._lock = threading.Lock()
         self._seek_start = False
+        self._last_spine_sample = 0.0
 
     def seek_to_start(self):
         with self._lock:
@@ -89,6 +99,27 @@ class PoseEngine:
                     for k, v in angles.items():
                         setattr(pose_frame, k, v)
                     pose_frame.keypoints = keypoints
+
+                    if _should_sample_spine(self._last_spine_sample, frame_start):
+                        self._last_spine_sample = frame_start
+                        hip = keypoints.get("left_hip") or keypoints.get("right_hip")
+                        shoulder = keypoints.get("left_shoulder") or keypoints.get("right_shoulder")
+                        if hip and shoulder and min(hip[3], shoulder[3]) > 0.3:
+                            h, w = frame.shape[:2]
+                            hip_px = (hip[0] * w, hip[1] * h)
+                            shoulder_px = (shoulder[0] * w, shoulder[1] * h)
+                            roi_result = crop_and_rotate_roi(frame, hip_px, shoulder_px)
+                            if roi_result:
+                                roi_image, hip_point, shoulder_point, chord_len = roi_result
+                                mask = self._backend.get_segmentation_mask(roi_image)
+                                if mask is not None:
+                                    profiles = extract_back_contour(mask, hip_point, shoulder_point)
+                                    if profiles:
+                                        face_left = facing_left(keypoints)
+                                        if face_left is not None:
+                                            left_profile, right_profile = profiles
+                                            pose_frame.spine_curvature_ratio = signed_curvature_ratio(
+                                                left_profile, right_profile, chord_len, face_left)
 
                 with self._lock:
                     subs = list(self._subscribers)
