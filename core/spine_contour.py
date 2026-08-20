@@ -100,10 +100,12 @@ def signed_curvature_ratio(left_profile: list[float], right_profile: list[float]
     silhouette from the straight line between its own two endpoints.
     Positive = outward bulge (excessive rounding / "bula"). Negative =
     inward cave (excessive arch / "svank"). None if the back-side profile
-    is empty."""
+    is empty or chord_len is not positive."""
     back_profile = right_profile if facing_left else left_profile
     n = len(back_profile)
     if n == 0:
+        return None
+    if chord_len <= 0:
         return None
 
     start, end = back_profile[0], back_profile[-1]

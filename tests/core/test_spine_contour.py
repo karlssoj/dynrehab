@@ -188,3 +188,8 @@ def test_signed_curvature_ratio_sign_flips_with_facing_direction():
 
 def test_signed_curvature_ratio_none_for_empty_profile():
     assert signed_curvature_ratio([], [], chord_len=100.0, facing_left=True) is None
+
+
+def test_signed_curvature_ratio_none_for_nonpositive_chord_len():
+    profile = [20.0] * 10
+    assert signed_curvature_ratio(profile, profile, chord_len=0.0, facing_left=True) is None
