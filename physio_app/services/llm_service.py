@@ -69,6 +69,25 @@ Fields marked [BOTH] are useful from either view.
           # knee bowing outward (varus)
       # values between -5 and +5 are acceptable alignment
 
+--- SPINE CURVATURE (SIDE VIEW, YOLO11 ONLY) ---
+  spine_curvature_ratio [SIDE, YOLO11 only] — signed deviation of the back's
+    silhouette from a straight hip-to-shoulder line, normalised by that
+    line's length. Positive = back bulges outward (excessive rounding).
+    Negative = back caves inward (excessive arch). Sampled periodically
+    (roughly 4 times per second, not every frame) — MOST FRAMES HAVE
+    pose_data["spine_curvature_ratio"] == None. ALWAYS check for None
+    before comparing:
+      val = pose_data.get("spine_curvature_ratio")
+      if val is not None and val > 0.35:
+          # back is rounding excessively
+      elif val is not None and val < -0.35:
+          # back is arching excessively
+    Do NOT assume a numeric default like other fields — unlike every other
+    pose_data field, None is this field's normal, common value, not an
+    error condition. Not available on MediaPipe-backed exercises (always
+    None there). The 0.35 threshold is an unvalidated starting point, not
+    a proven clinical value — treat any threshold you use here the same way.
+
 --- KEYPOINTS ---
   keypoints: dict[str, tuple[float,float,float,float]] — name→(x,y,z,visibility)
     x,y in [0,1] (y increases downward), visibility in [0,1]

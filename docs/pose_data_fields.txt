@@ -100,6 +100,37 @@ right_knee_valgus   [BOTH] hip → knee → ankle         Positive = valgus (kne
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SPINE CURVATURE  (signed, normalised silhouette deviation)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Field                     Landmarks used              Notes
+─────────────────────────────────────────────────────────────────────
+spine_curvature_ratio[SIDE]hip/shoulder + YOLO11-only Signed deviation of the back's
+                           segmentation mask          silhouette from a straight
+                                                       hip-to-shoulder line, normalised
+                                                       by that line's length.
+                                                       Positive = back bulges outward
+                                                       (excessive rounding).
+                                                       Negative = back caves inward
+                                                       (excessive arch).
+                                                       WARNING: sampled periodically
+                                                       (~4x/sec, not every frame) —
+                                                       most frames have this field
+                                                       == None. None is the NORMAL,
+                                                       common value here, not an
+                                                       error — always None-check
+                                                       before comparing, and never
+                                                       assume a numeric default.
+                                                       NEVER use abs() — sign is the
+                                                       direction, same caveat as
+                                                       left/right_knee_valgus above.
+                                                       [MP]: always None — YOLO11
+                                                       segmentation only, unlike every
+                                                       other field in this doc [MP]
+                                                       here means "MediaPipe: absent",
+                                                       not "0.0 default".
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 BILATERAL TILT ANGLES  (0° = both landmarks level)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Field                     Landmarks used              Notes
