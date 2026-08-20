@@ -193,8 +193,12 @@ canvas's vertical center line, at `hip_point[0]` == `shoulder_point[0]`):
    `signed_curvature_ratio` (next function) decides which one is the "back"
    using the facing-direction signal, so this function stays agnostic to
    facing direction.
-3. If fewer than 3 rows have a detectable edge on either side (e.g. mask is
-   empty or the crop missed the person), return `None`.
+3. Return `None` immediately if any row's centerline pixel is background
+   (or the centerline x-coordinate is out of the mask's bounds) — a single
+   noisy or gapped row invalidates the whole sample rather than being
+   skipped, because skipping would silently shift every later row's index
+   out of correspondence with its actual y-position, which
+   `signed_curvature_ratio`'s uniform-spacing assumption depends on.
 
 **`signed_curvature_ratio(left_profile, right_profile, chord_len, facing_left: bool) -> float | None`**
 
