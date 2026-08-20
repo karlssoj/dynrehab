@@ -92,3 +92,28 @@ def extract_back_contour(mask: np.ndarray, hip_point: tuple[float, float],
     if len(left_profile) < 3:
         return None
     return left_profile, right_profile
+
+
+def signed_curvature_ratio(left_profile: list[float], right_profile: list[float],
+                            chord_len: float, facing_left: bool) -> float | None:
+    """Signed, chord-length-normalized peak deviation of the back-side
+    silhouette from the straight line between its own two endpoints.
+    Positive = outward bulge (excessive rounding / "bula"). Negative =
+    inward cave (excessive arch / "svank"). None if the back-side profile
+    is empty."""
+    back_profile = right_profile if facing_left else left_profile
+    n = len(back_profile)
+    if n == 0:
+        return None
+
+    start, end = back_profile[0], back_profile[-1]
+
+    def straight_at(i: int) -> float:
+        if n <= 1:
+            return start
+        t = i / (n - 1)
+        return start + t * (end - start)
+
+    deviations = [back_profile[i] - straight_at(i) for i in range(n)]
+    peak = max(deviations, key=abs)
+    return peak / chord_len

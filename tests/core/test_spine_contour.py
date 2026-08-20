@@ -2,7 +2,7 @@ import pytest
 import numpy as np
 import cv2
 
-from core.spine_contour import facing_left, crop_and_rotate_roi, extract_back_contour, _MIN_CHORD_PX, _ROI_MARGIN_FRAC, _ROI_END_PAD_FRAC
+from core.spine_contour import facing_left, crop_and_rotate_roi, extract_back_contour, signed_curvature_ratio, _MIN_CHORD_PX, _ROI_MARGIN_FRAC, _ROI_END_PAD_FRAC
 
 
 def test_facing_left_true_when_nose_left_of_shoulder():
@@ -154,3 +154,37 @@ def test_extract_back_contour_returns_none_when_centerline_gap_within_range():
     shoulder_point = (50.0, 10.0)
     result = extract_back_contour(mask, hip_point, shoulder_point)
     assert result is None
+
+
+def test_signed_curvature_ratio_straight_profile_near_zero():
+    profile = [20.0] * 10
+    ratio = signed_curvature_ratio(profile, profile, chord_len=100.0, facing_left=True)
+    assert ratio == pytest.approx(0.0, abs=0.01)
+
+
+def test_signed_curvature_ratio_positive_for_outward_bulge():
+    straight = [20.0] * 10
+    bulged = [20.0, 20.0, 20.0, 25.0, 30.0, 25.0, 20.0, 20.0, 20.0, 20.0]
+    # facing_left=True -> back_profile = right_profile = bulged
+    ratio = signed_curvature_ratio(straight, bulged, chord_len=100.0, facing_left=True)
+    assert ratio > 0
+
+
+def test_signed_curvature_ratio_negative_for_inward_cave():
+    straight = [20.0] * 10
+    caved = [20.0, 20.0, 20.0, 15.0, 10.0, 15.0, 20.0, 20.0, 20.0, 20.0]
+    ratio = signed_curvature_ratio(straight, caved, chord_len=100.0, facing_left=True)
+    assert ratio < 0
+
+
+def test_signed_curvature_ratio_sign_flips_with_facing_direction():
+    straight = [20.0] * 10
+    bulged = [20.0, 20.0, 20.0, 25.0, 30.0, 25.0, 20.0, 20.0, 20.0, 20.0]
+    ratio_facing_left = signed_curvature_ratio(straight, bulged, chord_len=100.0, facing_left=True)
+    ratio_facing_right = signed_curvature_ratio(straight, bulged, chord_len=100.0, facing_left=False)
+    assert ratio_facing_left > 0
+    assert ratio_facing_right == pytest.approx(0.0, abs=0.01)
+
+
+def test_signed_curvature_ratio_none_for_empty_profile():
+    assert signed_curvature_ratio([], [], chord_len=100.0, facing_left=True) is None
