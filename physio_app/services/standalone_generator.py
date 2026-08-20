@@ -288,12 +288,8 @@ def _render_robot_config(ex) -> str:
 def _sync_lib_core():
     core_dst = _QT_DIR / "lib" / "core"
     core_dst.mkdir(parents=True, exist_ok=True)
-    for fname in ("pose_engine.py", "angle_calculator.py", "data_contract.py", "pose_backends.py"):
-        src = _CORE_SRC / fname
-        if src.exists():
-            shutil.copy2(src, core_dst / fname)
-        else:
-            print(f"[standalone] warning: core source {fname} not found at {src}")
+    for src in sorted(_CORE_SRC.glob("*.py")):
+        shutil.copy2(src, core_dst / src.name)
     init = core_dst / "__init__.py"
     if not init.exists():
         init.write_text("", encoding="utf-8")
