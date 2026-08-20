@@ -158,20 +158,32 @@ def test_default_get_segmentation_mask_returns_none():
     assert backend.get_segmentation_mask(np.zeros((10, 10, 3), dtype=np.uint8)) is None
 
 
+def _make_seg_result(mask_arrays, classes):
+    """Build a fake ultralytics segmentation Results object with N detected
+    masks (mask_arrays: list of 2D np.ndarray) and their per-detection class
+    ids (classes: list[int], same length/order as mask_arrays)."""
+    masks = MagicMock()
+    masks.data = MagicMock()
+    masks.data.shape = (len(mask_arrays),)
+    masks.data.cpu.return_value.numpy.return_value = np.stack(mask_arrays)
+    masks.data.__len__ = MagicMock(return_value=len(mask_arrays))
+
+    boxes = MagicMock()
+    boxes.cls = MagicMock()
+    boxes.cls.cpu.return_value.numpy.return_value = np.array(classes, dtype=float)
+
+    result = MagicMock()
+    result.masks = masks
+    result.boxes = boxes
+    return result
+
+
 def test_yolo_get_segmentation_mask_returns_resized_binary_mask(monkeypatch):
     model = MagicMock()
     mask_source = np.zeros((160, 160), dtype=np.float32)
     mask_source[40:120, 40:120] = 1.0
 
-    masks = MagicMock()
-    masks.data = MagicMock()
-    masks.data.shape = (1,)
-    single_mask = MagicMock()
-    single_mask.cpu.return_value.numpy.return_value = mask_source
-    masks.data.__getitem__ = MagicMock(return_value=single_mask)
-
-    result = MagicMock()
-    result.masks = masks
+    result = _make_seg_result([mask_source], classes=[0])  # class 0 = person
     model.return_value = [result]
 
     backend = _make_backend(monkeypatch, model)
@@ -193,3 +205,73 @@ def test_yolo_get_segmentation_mask_returns_none_when_no_mask(monkeypatch):
     backend = _make_backend(monkeypatch, model)
     roi = np.zeros((80, 80, 3), dtype=np.uint8)
     assert backend.get_segmentation_mask(roi) is None
+
+
+def test_yolo_get_segmentation_mask_load_failure_returns_none_without_raising(monkeypatch):
+    # First YOLO(...) call (in __init__) is the pose model and succeeds;
+    # the second (lazy segmentation model load) raises.
+    fake_module = types.ModuleType("ultralytics")
+    pose_model = MagicMock()
+    fake_module.YOLO = MagicMock(side_effect=[pose_model, RuntimeError("no weights")])
+    monkeypatch.setitem(sys.modules, "ultralytics", fake_module)
+
+    from core.pose_backends import YOLOBackend
+    backend = YOLOBackend()
+
+    roi = np.zeros((80, 80, 3), dtype=np.uint8)
+    assert backend.get_segmentation_mask(roi) is None
+
+
+def test_yolo_get_segmentation_mask_load_failure_is_latched_not_retried(monkeypatch):
+    fake_module = types.ModuleType("ultralytics")
+    pose_model = MagicMock()
+    fake_module.YOLO = MagicMock(side_effect=[pose_model, RuntimeError("no weights")])
+    monkeypatch.setitem(sys.modules, "ultralytics", fake_module)
+
+    from core.pose_backends import YOLOBackend
+    backend = YOLOBackend()
+
+    roi = np.zeros((80, 80, 3), dtype=np.uint8)
+    assert backend.get_segmentation_mask(roi) is None
+    assert fake_module.YOLO.call_count == 2  # pose model (ctor) + failed seg model attempt
+
+    # Second call must not attempt to construct YOLO again.
+    assert backend.get_segmentation_mask(roi) is None
+    assert fake_module.YOLO.call_count == 2
+
+
+def test_yolo_get_segmentation_mask_filters_out_non_person_class(monkeypatch):
+    model = MagicMock()
+    mask_source = np.zeros((160, 160), dtype=np.float32)
+    mask_source[40:120, 40:120] = 1.0
+
+    # Only detection is class 57 ("chair") -- must not be treated as the
+    # back profile even though it's the only/first mask.
+    result = _make_seg_result([mask_source], classes=[57])
+    model.return_value = [result]
+
+    backend = _make_backend(monkeypatch, model)
+    roi = np.zeros((80, 80, 3), dtype=np.uint8)
+    assert backend.get_segmentation_mask(roi) is None
+
+
+def test_yolo_get_segmentation_mask_prefers_person_over_other_class(monkeypatch):
+    model = MagicMock()
+    # Chair mask (class 57) is listed first / larger area, person mask
+    # (class 0) is second / smaller area -- person must still win because
+    # only person-class detections are eligible.
+    chair_mask = np.ones((160, 160), dtype=np.float32)
+    person_mask = np.zeros((160, 160), dtype=np.float32)
+    person_mask[60:100, 60:100] = 1.0
+
+    result = _make_seg_result([chair_mask, person_mask], classes=[57, 0])
+    model.return_value = [result]
+
+    backend = _make_backend(monkeypatch, model)
+    roi = np.zeros((80, 80, 3), dtype=np.uint8)
+    mask = backend.get_segmentation_mask(roi)
+
+    assert mask is not None
+    # person_mask covers a 40x40 region out of 160x160, scaled to an 80x80
+    # roi -> a 20x20 region of 255s, not the full chair-sized mask.
+    assert (mask == 255).sum() == pytest.approx(20 * 20, abs=4)

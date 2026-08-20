@@ -207,14 +207,30 @@ class YOLOBackend(PoseBackend):
         return {}, annotated
 
     def get_segmentation_mask(self, roi_image: np.ndarray) -> np.ndarray | None:
+        if self._seg_model is False:
+            return None
         if self._seg_model is None:
-            from ultralytics import YOLO
-            self._seg_model = YOLO(self._seg_model_path)
+            try:
+                from ultralytics import YOLO
+                self._seg_model = YOLO(self._seg_model_path)
+            except Exception as e:
+                print(f"[pose_backends] segmentation model load failed, disabling spine sampling: {e}")
+                self._seg_model = False
+                return None
         results = self._seg_model(roi_image, verbose=False, imgsz=320)
         for r in results:
             if r.masks is None or r.masks.data.shape[0] == 0:
+                continue
+            classes = r.boxes.cls.cpu().numpy() if r.boxes is not None else None
+            masks_np = r.masks.data.cpu().numpy()
+            if classes is not None:
+                person_indices = [i for i, c in enumerate(classes) if int(c) == 0]
+            else:
+                person_indices = list(range(len(masks_np)))
+            if not person_indices:
                 return None
-            mask = r.masks.data[0].cpu().numpy()
+            best_idx = max(person_indices, key=lambda i: masks_np[i].sum())
+            mask = masks_np[best_idx]
             mask_u8 = (mask > 0.5).astype("uint8") * 255
             return cv2.resize(mask_u8, (roi_image.shape[1], roi_image.shape[0]),
                                interpolation=cv2.INTER_NEAREST)
