@@ -27,3 +27,17 @@ def test_pose_frame_to_dict_roundtrip():
     d = frame.to_dict()
     assert d["timestamp"] == 1.5
     assert d["left_knee_angle"] == 92.3
+
+
+def test_pose_frame_spine_curvature_ratio_defaults_to_none():
+    from core.data_contract import PoseFrame
+    pf = PoseFrame(timestamp=0.0)
+    assert pf.spine_curvature_ratio is None
+    assert pf.to_dict()["spine_curvature_ratio"] is None
+
+
+def test_pose_frame_spine_curvature_ratio_settable():
+    from core.data_contract import PoseFrame
+    pf = PoseFrame(timestamp=0.0)
+    pf.spine_curvature_ratio = 0.12
+    assert pf.to_dict()["spine_curvature_ratio"] == 0.12
