@@ -77,7 +77,7 @@ def extract_back_contour(mask: np.ndarray, hip_point: tuple[float, float],
     for y in range(max(0, y_start), min(h, y_end + 1)):
         row = mask[y]
         if center_x < 0 or center_x >= w or row[center_x] == 0:
-            continue
+            return None
 
         x = center_x
         while x > 0 and row[x] > 0:

@@ -145,3 +145,12 @@ def test_extract_back_contour_returns_none_for_empty_mask():
     mask = np.zeros((100, 100), dtype=np.uint8)
     result = extract_back_contour(mask, (50.0, 90.0), (50.0, 10.0))
     assert result is None
+
+
+def test_extract_back_contour_returns_none_when_centerline_gap_within_range():
+    mask = _make_straight_mask()
+    mask[50, 45:55] = 0  # background gap covering the center column at row 50
+    hip_point = (50.0, 90.0)
+    shoulder_point = (50.0, 10.0)
+    result = extract_back_contour(mask, hip_point, shoulder_point)
+    assert result is None
