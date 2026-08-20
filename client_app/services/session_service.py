@@ -69,6 +69,7 @@ class SessionService:
         self._countdown_last: Optional[int] = None
         self._feedback_emitted = False
         self._last_cue_time: float = 0.0
+        self._last_classify_time: float = 0.0
         self._rep_cues: list[str] = []
         self._round_feedback_history: list[list[str]] = []
         self._rep_snapshots: list[dict] = []
@@ -85,6 +86,7 @@ class SessionService:
         self._generate_round_feedback = namespace.get("generate_round_feedback")
         self._generate_rep_feedback = namespace.get("generate_rep_feedback")
         self._generate_rep_cue = namespace.get("generate_rep_cue")
+        self._classify_movement = namespace.get("classify_movement")
         self._get_session_summary = namespace.get("get_session_summary")
         self._get_instructions = namespace.get("get_instructions")
         self._reset_round = namespace.get("reset_round")
@@ -229,6 +231,9 @@ class SessionService:
             result["round_rep_count"] = self._round_rep_count
             result["total_reps"] = self.rep_count
 
+            if _rep_detected:
+                self._last_classify_time = time.time()
+
             if (not _rep_detected
                     and "during_exercise" in self._feedback_mode
                     and self._last_cue_time > 0
@@ -239,6 +244,18 @@ class SessionService:
                     result["rep_cue"] = cue
                     self._rep_cues.append(cue)
 
+            if (self._state == "exercise"
+                    and not _rep_detected
+                    and self._classify_movement
+                    and time.time() - self._last_classify_time >= 5.0):
+                self._last_classify_time = time.time()
+                try:
+                    cue = self._classify_movement(list(self._round_frames[-75:]))
+                    if cue:
+                        result["prompt_cue"] = str(cue).strip()
+                except Exception as e:
+                    print(f"[session] classify_movement error: {e}")
+
             if self._state == "exercise" and elapsed >= self._exercise_secs:
                 if "after_window" in self._feedback_mode:
                     feedback = self._enter_feedback()
@@ -246,16 +263,6 @@ class SessionService:
                     result["time_remaining"] = 0.0
                     result["state"] = "feedback"
                     self._feedback_emitted = True
-                else:
-                    self._all_rounds.append({
-                        "round_number": self._round_number,
-                        "rep_count": self._round_rep_count,
-                        "frames": list(self._round_frames),
-                        "duration_seconds": self._exercise_secs,
-                    })
-                    self._state = "done"
-                    result["state"] = "done"
-                    result["time_remaining"] = 0.0
 
         elif self._state == "feedback":
             if not self._feedback_emitted:
@@ -267,6 +274,7 @@ class SessionService:
 
     def _enter_exercise(self):
         self._last_cue_time = time.time()
+        self._last_classify_time = time.time()
         self._state = "exercise"
         self._state_wall_start = time.time()
         self._round_number += 1

@@ -242,6 +242,7 @@ def _render_config(ex) -> str:
         feedback_mode = _json.loads(ex.feedback_mode) if ex.feedback_mode else ["after_window"]
     except (ValueError, TypeError):
         feedback_mode = ["after_window"]
+    pose_backend = getattr(ex, "pose_backend", "mediapipe") or "mediapipe"
     lines = [
         "CONFIG = {",
         f"    \"name\": {repr(ex.name)},",
@@ -250,9 +251,11 @@ def _render_config(ex) -> str:
         f"    \"display_values\": {repr(ex.display_values)},",
         f"    \"session_duration_secs\": {ex.session_duration_secs},",
         f"    \"feedback_mode\": {_json.dumps(feedback_mode)},",
-        "}",
-        "",
+        f"    \"pose_backend\": {repr(pose_backend)},",
     ]
+    if pose_backend == "yolo11":
+        lines.append('    "yolo_model": "yolo11n-pose.pt",')
+    lines += ["}", ""]
     return "\n".join(lines)
 
 
@@ -264,6 +267,9 @@ def _render_robot_config(ex) -> str:
         feedback_mode = ["after_window"]
     if "after_exercise" not in feedback_mode:
         feedback_mode = list(feedback_mode) + ["after_exercise"]
+    pose_backend = getattr(ex, "pose_backend", "mediapipe") or "mediapipe"
+    # Robot always uses YOLO (no MediaPipe on ROS Noetic). Map "mediapipe" → "yolo" for robot.
+    robot_backend = "yolo" if pose_backend in ("mediapipe", "yolo11") else pose_backend
     lines = [
         "CONFIG = {",
         f"    \"name\": {repr(ex.name)},",
@@ -271,6 +277,8 @@ def _render_robot_config(ex) -> str:
         f"    \"client_instructions\": {repr(ex.client_instructions)},",
         f"    \"session_duration_secs\": {ex.session_duration_secs},",
         f"    \"feedback_mode\": {_json.dumps(feedback_mode)},",
+        f"    \"pose_backend\": {repr(robot_backend)},",
+        '    "yolo_model": "yolo11n-pose.pt",',
         "}",
         "",
     ]

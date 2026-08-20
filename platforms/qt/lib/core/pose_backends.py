@@ -137,6 +137,6 @@ class YOLOBackend(PoseBackend):
 def create_backend(config: dict) -> PoseBackend:
     """Instantiate the pose backend named in config['pose_backend'] (default: 'mediapipe')."""
     name = config.get("pose_backend", "mediapipe").lower()
-    if name == "yolo":
+    if name in ("yolo", "yolo11"):
         return YOLOBackend(config.get("yolo_model", "yolo11n-pose.pt"))
     return MediaPipeBackend()

@@ -6,8 +6,9 @@ entry per line) and speaks each message in order via Windows PowerShell
 System.Speech. Writes voice_done.json after each speech so the exercise
 app knows when to advance.
 
-On QTRobot, use platforms/qt/ instead — it has its own TTS that
-calls the robot's speech service directly.
+On QTRobot, replace this file with a module that uses the robot's TTS API.
+Contract: read message_queue.jsonl, speak each entry's "text" in order,
+write voice_done.json with the entry's "timestamp" when done.
 """
 import json
 import subprocess

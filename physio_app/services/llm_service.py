@@ -12,6 +12,9 @@ Fields marked [FRONT] are most informative from a front-view camera.
 Fields marked [BOTH] are useful from either view.
 
 --- JOINT ANGLES (raw, ~180°=straight, decreases as joint bends) ---
+  *** DO NOT USE these fields in detect_rep or feedback logic. ***
+  *** They decrease as the joint bends — thresholds on them are reversed and error-prone. ***
+  *** Use the _bend_2d fields below instead. These raw fields exist for reference only.  ***
   left_knee_angle / right_knee_angle [BOTH] — ~170° standing, ~90° deep squat
   left_hip_angle / right_hip_angle [BOTH] — ~180° standing, ~90° hip flexion
   left_ankle_angle / right_ankle_angle [BOTH] — knee-ankle-foot_index angle
@@ -19,18 +22,24 @@ Fields marked [BOTH] are useful from either view.
   left_elbow_angle / right_elbow_angle [BOTH] — ~180° straight, ~45° fully bent
   left_wrist_angle / right_wrist_angle [BOTH] — elbow-wrist-index_finger angle
   neck_angle [BOTH] — angle at shoulder-midpoint between trunk and nose direction
-  left_hka_alignment / right_hka_alignment [FRONT] — hip-knee-ankle angle ~180°=straight.
+  left_hka_alignment / right_hka_alignment [FRONT] — IDENTICAL to left/right_knee_angle.
     WARNING: SCALAR — decreases for BOTH valgus and varus. Do NOT use to detect direction.
     Use left_knee_valgus / right_knee_valgus instead.
 
---- BEND VALUES (0°=straight, increases as joint bends — prefer these over raw angles) ---
-  left_elbow_bend_2d / right_elbow_bend_2d [BOTH] — 0°=straight, ~135°=fully curled.
-  left_knee_bend_2d / right_knee_bend_2d [BOTH] — 0°=straight, ~90°=deep squat.
+--- BEND VALUES (0°=straight, increases as joint bends — USE THESE in all analysis code) ---
+  left_elbow_bend_2d / right_elbow_bend_2d [BOTH] — 0°=straight arm, ~135°=fully curled.
+    Clinical scale: ~30°=slight bend, ~70°=right angle, ~120°=hand near shoulder.
+  left_knee_bend_2d / right_knee_bend_2d [BOTH] — 0°=straight leg, ~90°=parallel squat.
+    Clinical scale: ~30°=slight bend, ~45°=quarter squat, ~70°=half squat,
+    ~90°=thigh horizontal (parallel) = standard physiotherapy target for a full squat.
+    A threshold below 75° as "acceptable depth" is rarely appropriate for a squat exercise.
     Also reliable for FRONT-view squats: hip descent in y captures depth.
   left_hip_bend_2d / right_hip_bend_2d [BOTH] — 0°=upright, increases as hip flexes.
+    Clinical scale: ~45°=moderate flexion, ~90°=hip at right angle (e.g. seated posture).
 
 --- SEGMENT-FROM-VERTICAL ANGLES (0°=segment vertical, increases as it tilts) ---
-  trunk_lean_angle / trunk_lean_2d [BOTH] — trunk lean from vertical.
+  trunk_lean_2d [BOTH] — trunk lean from vertical. USE THIS. trunk_lean_angle is
+    identical (same formula, kept for legacy reasons) — always prefer trunk_lean_2d.
     SIDE view: measures forward lean. FRONT view: measures lateral lean (side-bend).
   left_shin_angle / right_shin_angle [SIDE] — shin (ankle→knee) from vertical.
     0°=shin vertical, ~20-30°=typical squat lean. Key for squat/lunge form.
@@ -67,11 +76,22 @@ Fields marked [BOTH] are useful from either view.
     left/right_hip, left/right_knee, left/right_ankle,
     left/right_foot_index, left/right_heel
 
-ANGLE CONVENTION (use consistently across ALL exercises):
+ANGLE CONVENTION (mandatory — apply consistently across ALL exercises):
   0° = fully straight / fully extended joint
   Higher values = more bent / more flexed
-  Use bend amount = 180° − raw_angle (pre-computed as _bend_2d fields).
-  Example: raw knee angle 90° → knee_bend = 90° (deeply bent).
+  ALWAYS use the _bend_2d pre-computed fields (left_knee_bend_2d, left_elbow_bend_2d, etc.).
+  NEVER write thresholds against raw angle fields (left_knee_angle etc.) — they go the wrong
+  way (180°=straight) and cause silent logic errors (e.g. `knee_angle > 60` would only fire
+  for an extremely deep squat, not a moderate one).
+  Quick reference — knee_bend_2d:
+    0°  = standing (straight leg)
+    45° = quarter squat
+    70° = half squat
+    90° = parallel squat (thigh horizontal) — standard physiotherapy target
+  Quick reference — elbow_bend_2d:
+    0°  = straight arm
+    70° = right angle
+    120°= hand close to shoulder
 
 HELPER for frontal pelvic tilt (use instead of pose_data["pelvic_tilt"] from front camera):
   def _pelvic_tilt_2d(pose_data):
@@ -162,6 +182,23 @@ SIDE-VIEW SPECIFIC — heel rise detection:
     rises = [_heel_rise(f) for f in frames if f.get("left_knee_bend_2d", 0) > 20]
     if rises and max(rises) > 0.02:   # 0.02 ≈ 5 cm heel rise — DO NOT raise this
         feedback.append("Your heels were lifting off the ground — work on ankle mobility.")
+
+SIDE-VIEW EXERCISES — orientation guard and stance validation (REQUIRED for all side-view exercises):
+  shoulder_lateral_span is near-zero when patient is in side profile; grows to 0.2–0.4 when
+  facing the camera. Always add this guard at the TOP of detect_rep for side-view exercises:
+    if pose_data.get("shoulder_lateral_span", 1.0) > 0.15:
+        _phase = "ready"   # MUST reset — never leave phase as "moving" when orientation is lost
+        return False
+  This prevents walking toward the camera, body turns, and off-axis movements from being
+  counted as reps. Resetting _phase is critical: without it, a partial rep started in profile
+  will complete spuriously the moment the patient turns back.
+
+  ankle_lateral_span in side-profile view: near-zero = feet side by side; > 0.20 = one foot
+  significantly in front of the other (staggered stance). Add to feedback functions:
+    ankle_spans = [f.get("ankle_lateral_span", 0.0) for f in frames]
+    avg_ankle_span = statistics.mean(ankle_spans) if ankle_spans else 0.0
+    if avg_ankle_span > 0.20:
+        feedback.append("Make sure both feet are side by side — one foot appears to be in front of the other.")
 
 LOWER-BODY SIDE-VIEW HELPERS — copy these verbatim for squat, lunge, deadlift, step-up, calf raise:
   These three helpers work together. _depth_frames() filters to frames where the knee is
@@ -494,9 +531,85 @@ def detect_rep(pose_data: dict) -> bool:
     # moves past the start threshold and returns to near-start IS a rep.
     # Depth adequacy and form quality are checked in feedback functions only.
     # Use module-level variables. reset_round() resets them.
+    #
+    # COORDINATION CHECK — prevents partial/wrong movements counting as reps.
+    # For exercises requiring the whole body to move together (squat, deadlift,
+    # lunge, sit-to-stand): a single isolated joint moving alone is NOT a rep.
+    # Example — squat: a single-leg lift bends one knee but the hip stays level,
+    # so it must NOT count.
+    # Pattern: track a secondary marker that confirms the full movement occurred.
+    # For squat/deadlift/sit-to-stand: secondary marker = hip descent in image.
+    #   _start_hip_y = 0.0   # hip y when movement starts (y increases downward)
+    #   _peak_hip_y  = 0.0   # highest (most descended) hip y seen during 'moving'
+    #   In "ready"→"moving": record _start_hip_y from keypoints.
+    #   In "moving" phase: track peak hip_y (higher y = lower hip position).
+    #   At completion: return True only if _peak_hip_y > _start_hip_y + 0.03
+    #                  (hip descended ≥ 3% of frame height).
+    #   If hip landmarks absent (no reliable reading): allow the rep.
+    #   Read hip y from keypoints:
+    #     kpts = pose_data.get("keypoints", {})
+    #     h = kpts.get("left_hip") or kpts.get("right_hip")
+    #     hip_y = h[1] if h and h[3] > 0.3 else 0.0
+    # Do NOT apply this check for in-place joint exercises (bicep curl, seated
+    # leg raise, shoulder rotation) where the torso is meant to stay still.
 
 def reset_round():
     # OPTIONAL. Reset detect_rep state before each new window / rep cycle.
+    # Must reset ALL module-level variables used by detect_rep, including any
+    # coordination tracking variables (_start_hip_y, _peak_hip_y, etc.).
+
+def classify_movement(frames: list) -> str | None:
+    # OPTIONAL (but recommended). Called every ~5 seconds when no rep has been counted recently.
+    # frames: the most recent ~3 seconds of pose data (up to ~75 frames).
+    #
+    # Purpose: detect whether the patient is performing THIS SPECIFIC EXERCISE
+    # or doing something wrong (idle, wrong pattern, partial movement).
+    #
+    # Return None if: patient is clearly attempting this exercise (even imperfectly).
+    # Return a SHORT spoken sentence (one sentence) if:
+    #   - Patient is not moving (< 5–10° range in primary joint).
+    #   - Patient is moving but in the WRONG PATTERN for this exercise.
+    #     Wrong pattern = the exercise's characteristic COMBINATION of joint
+    #     movements is not happening. Examples:
+    #       squat: knee bends but hip does NOT descend in image → single-leg lift
+    #       shoulder press: arm rises but elbow doesn't extend → wrong movement
+    #       deadlift: knee bends but trunk doesn't hinge forward → partial movement
+    #
+    # HOW TO IMPLEMENT:
+    # 1. Compute range of primary angle: filter zero values, then max − min.
+    #    If range < ~10° → patient is idle → return "Start the exercise by [description]."
+    # 2. Check the SECONDARY MARKER that defines the exercise pattern.
+    #    For exercises where the body moves down/up (squat, deadlift, sit-to-stand):
+    #      secondary = hip y-coordinate descent.
+    #      Split frames into: bent_frames (primary angle high) vs stand_frames (primary low).
+    #      Compute avg hip_y in each group from keypoints.
+    #      If bent_frames have similar hip_y as stand_frames → hip never descended →
+    #      wrong movement → return correction prompt.
+    #    For exercises where a second joint coordinates (press, row, etc.):
+    #      compute range of secondary angle the same way as primary.
+    # 3. Return None if the full pattern is present.
+    #
+    # Example — squat (side view):
+    #   bends = [_best_knee_bend(f) for f in frames if _best_knee_bend(f) > 1.0]
+    #   bend_range = max(bends) - min(bends) if bends else 0.0
+    #   if bend_range < 10.0:
+    #       return "Start the exercise by bending both knees to squat down."
+    #   bent  = [f for f in frames if _best_knee_bend(f) > 20.0]
+    #   stand = [f for f in frames if _best_knee_bend(f) <  5.0]
+    #   if bent and stand:
+    #       def _hy(f):
+    #           kpts = f.get("keypoints", {})
+    #           pts = [kpts[s][1] for s in ("left_hip","right_hip")
+    #                  if kpts.get(s) and kpts[s][3] > 0.3]
+    #           return sum(pts)/len(pts) if pts else 0.0
+    #       bent_hy  = [_hy(f) for f in bent  if _hy(f) > 0]
+    #       stand_hy = [_hy(f) for f in stand if _hy(f) > 0]
+    #       if bent_hy and stand_hy:
+    #           if sum(bent_hy)/len(bent_hy) < sum(stand_hy)/len(stand_hy) + 0.03:
+    #               return "Squat down by lowering your hips equally on both sides."
+    #   return None
+    #
+    # Keep to one sentence. Do NOT correct form here — that is feedback's job.
 """)
 
     if "during_exercise" in modes:
@@ -709,6 +822,16 @@ def _format_reference_data(reference_data: dict) -> str:
         "  'movement started' = bend_min + 30% of bend_range",
         "  'full rep'         = bend_min + 60% of bend_range",
         "",
+        "CLINICAL MINIMUM THRESHOLDS — enforce regardless of reference video data:",
+        "  The 60%-of-range formula can produce a threshold that is clinically too low",
+        "  (e.g. a shallow demo squat gives range 80° → 60% = 48°, which accepts poor depth).",
+        "  Always raise the 'full rep' threshold to at least these minimums:",
+        "    knee  bend_2d: minimum 75°  (0-45°=insufficient, 45-75°=partial, 75°+=acceptable)",
+        "    elbow bend_2d: minimum 70°  (0-40°=insufficient, 40-70°=partial, 70°+=acceptable)",
+        "    hip   bend_2d: minimum 60°",
+        "  Example: reference gives knee range 80° → 60% = 48° → raise to 75°.",
+        "  Example: reference gives knee range 140° → 60% = 84° → keep 84° (above minimum).",
+        "",
     ]
 
     if warnings:
@@ -748,6 +871,99 @@ def _format_reference_data(reference_data: dict) -> str:
     return "\n".join(lines)
 
 
+_YOLO11_LIMITATIONS = """\
+POSE ESTIMATION BACKEND: YOLO11 (17-keypoint COCO model)
+=========================================================
+YOLO11 detects only the 17 standard COCO body keypoints. The following
+keypoints are NOT available and must never be referenced:
+  - left_heel / right_heel
+  - left_foot_index / right_foot_index
+  (Also absent: inner/outer eye, mouth corners, fingers)
+
+Critical implications for code generation:
+  - DO NOT implement _heel_rise() — it requires left_heel and left_foot_index
+    which are absent. If the exercise instructions mention heel rise, skip
+    that check entirely and do not reference those keypoints.
+  - left_ankle_angle / right_ankle_angle defaults to 0.0 (foot_index missing).
+    Do not rely on ankle_angle for detection.
+  - left_shin_angle / right_shin_angle are available but YOLO11 systematically
+    under-measures them in side-profile view. For knees-over-toes detection use
+    this body-proportion helper instead — it normalises by shin length so the
+    threshold is body-size independent and does not require foot landmarks.
+    Pick the tracked leg ONCE per rep from aggregate visibility (not per frame —
+    per-frame re-selection lets the measurement flicker between legs when
+    left/right visibility is close), and aggregate the per-frame ratio as the
+    SECOND-HIGHEST value (not a single max()) — genuine excessive forward
+    travel persists across several consecutive frames, a single sensor
+    glitch does not, so requiring the runner-up value to also clear the
+    threshold filters out one-frame spikes without adding lag:
+
+    def _leg_side_for_forward_ratio(frames: list) -> str | None:
+        \"\"\"Pick the more-visible leg once for the whole rep.\"\"\"
+        best_side, best_vis = None, 0.0
+        for side in ("left", "right"):
+            vis_vals = []
+            for f in frames:
+                kpts = f.get("keypoints", {})
+                k = kpts.get(f"{side}_knee"); a = kpts.get(f"{side}_ankle")
+                if k and a:
+                    vis_vals.append(min(k[3], a[3]))
+            if vis_vals:
+                avg_vis = sum(vis_vals) / len(vis_vals)
+                if avg_vis > best_vis:
+                    best_side, best_vis = side, avg_vis
+        return best_side if best_vis > 0.3 else None
+
+    def _knee_forward_ratio(pose_data: dict, side: str) -> float:
+        \"\"\"abs(knee_x - ankle_x) / shin_length for a fixed side. ~0.7 = knee over toes.\"\"\"
+        kpts = pose_data.get("keypoints", {})
+        knee = kpts.get(f"{side}_knee"); ankle = kpts.get(f"{side}_ankle")
+        if not knee or not ankle or min(knee[3], ankle[3]) < 0.3:
+            return 0.0
+        shin_len = math.hypot(knee[0] - ankle[0], knee[1] - ankle[1])
+        if shin_len < 0.02:
+            return 0.0
+        return abs(knee[0] - ankle[0]) / shin_len
+
+    def _second_highest(values: list) -> float:
+        \"\"\"Second-largest value (duplicates counted individually); falls back
+        to the single value when there's only one, or 0.0 when empty. Uses a
+        manual single-pass comparison instead of sorted() — sorted() is not in
+        the sandboxed builtins whitelist and raises NameError at runtime.\"\"\"
+        first = second = -1.0
+        for v in values:
+            if v > first:
+                first, second = v, first
+            elif v > second:
+                second = v
+        if second >= 0:
+            return second
+        return first if first >= 0 else 0.0
+
+    Usage in generate_rep_feedback / generate_round_feedback:
+        check_frames = bent_frames if bent_frames else frames
+        side = _leg_side_for_forward_ratio(check_frames)
+        if side:
+            ratios = [r for r in (_knee_forward_ratio(f, side) for f in check_frames) if r > 0.05]
+            if ratios:
+                robust_peak = _second_highest(ratios)
+                # 0.35, not 0.45 — the originally documented "good squat reads
+                # 0.26-0.42" band left only ~0.03 margin before the flag, too
+                # thin to survive real-world measurement noise. Re-tune further
+                # if this still under- or over-triggers in practice.
+                if robust_peak > 0.35:
+                    feedback.append("Your knees are travelling too far over your toes...")
+
+    abs() handles both left-facing and right-facing profile stances automatically.
+
+  - All other major angles are fully available: knee bend, hip bend, trunk lean,
+    elbow bend, shoulder, arm elevation, knee valgus, pelvic tilt.
+
+When generating feedback functions: if instructions request heel rise detection,
+replace it with a note in comments and omit the check from the code.
+"""
+
+
 def build_prompt(exercise_name: str, camera_view: str,
                  client_instructions: str,
                  llm_instructions: str,
@@ -755,7 +971,8 @@ def build_prompt(exercise_name: str, camera_view: str,
                  display_values: str,
                  session_duration_secs: int,
                  reference_data: dict | None = None,
-                 feedback_mode: list | None = None) -> str:
+                 feedback_mode: list | None = None,
+                 pose_backend: str = "mediapipe") -> str:
     modes = set(feedback_mode) if feedback_mode else {"after_window"}
     ref_section = ""
     if reference_data:
@@ -763,6 +980,7 @@ def build_prompt(exercise_name: str, camera_view: str,
     function_spec = _build_function_spec(session_duration_secs, list(modes))
     # Include the few-shot example only for after_window mode (it demonstrates that function)
     few_shot_section = _FEW_SHOT if "after_window" in modes else ""
+    backend_section = _YOLO11_LIMITATIONS if pose_backend == "yolo11" else ""
     # Boundary values label: only mention the feedback function when relevant
     boundary_label = (
         "Boundary values (quality targets for the feedback functions — NOT thresholds for "
@@ -786,7 +1004,7 @@ Analysis instructions (what to look for and what feedback to give):
 
 Display values (which values to show on screen during motion analysis):
 {display_values}
-
+{backend_section}
 Available pose data fields:
 {_POSE_DATA_DESCRIPTION}
 {few_shot_section}
@@ -797,11 +1015,23 @@ Now generate the analysis module for '{exercise_name}' following the same struct
 
 Rules:
 - Only import math, statistics, collections, itertools, or functools if needed. Do NOT import os, sys, subprocess, socket, or requests.
+- This code runs in a sandboxed exec() with a restricted builtins whitelist. ONLY these
+  builtins are available: abs, all, any, bool, dict, enumerate, float, int, len, list, max,
+  min, print, range, round, set, str, sum, tuple, zip, isinstance, issubclass, type, hasattr,
+  getattr, None, True, False. Any other builtin — including sorted, filter, map, reversed,
+  next, format, repr, open — raises NameError at runtime. The caller wraps every feedback
+  function in a broad try/except that silently discards the whole return value on ANY
+  exception and substitutes a generic placeholder message, so a NameError here is invisible
+  except as feedback that never varies with performance. To sort or rank values, use
+  max()/min() over a generator expression, or a manual single-pass comparison loop — never
+  sorted().
 - Use module-level variables for state (rep phase tracking, etc.).
 - Implement exactly the functions listed in the function spec above. detect_rep is always required.
 - Feedback language: use plain verbal coaching by default. Only include numeric angle values if the physiotherapist's instructions explicitly request them.
 - All angles in pose_data are computed from x,y only (z is ignored). You may use left/right_elbow_angle, trunk_lean_angle etc. directly — they are already 2D. Prefer the pre-computed _bend_2d fields (0=straight convention) wherever available.
 - Use a CONSISTENT angle convention across all helpers: 0° = fully straight, higher = more bent/flexed. Always compute bend amount as (180° − raw_angle).
+- NEVER use raw angle fields (left_knee_angle, right_knee_angle, left_hip_angle, left_elbow_angle, left_hka_alignment, etc.) in detect_rep or feedback logic. These fields decrease as the joint bends (180°=straight), making thresholds backwards and hard to reason about. Always use the corresponding _bend_2d field: left_knee_bend_2d, left_hip_bend_2d, left_elbow_bend_2d. The sidebar display handles raw angles automatically — you do not need to use them in code.
+- For side-view exercises: always add a shoulder_lateral_span > 0.15 guard at the top of detect_rep (reset _phase = "ready", return False). Always add an ankle_lateral_span > 0.20 check in feedback functions. See SIDE-VIEW EXERCISES — orientation guard section above.
 - For frontal-view exercises: do NOT use pose_data["pelvic_tilt"] — compute _pelvic_tilt_2d from keypoints instead. Do NOT use hka_alignment to detect knee valgus direction — it is unsigned and fires for both valgus and varus. Use pose_data["left_knee_valgus"] / pose_data["right_knee_valgus"] directly (positive = inward/valgus, negative = outward/varus). Do NOT attempt to detect knees-over-toes from a front view — it requires a side-view camera and shin_angle.
 - For lying, seated, or kneeling exercises: do NOT use trunk lean as the primary detection signal. Use the bend helper for the joint being exercised (_knee_bend_2d, _elbow_bend_2d, etc.). Set the 'return to straight' threshold at ~15-20° bend to account for natural resting position noise.
 - Implement get_relevant_joints() returning 1-4 (label, pose_data_key) pairs for the joints most relevant to this exercise. Use keys that exist in pose_data (e.g. "left_knee_angle", "trunk_lean_angle", "left_arm_elevation").
@@ -813,10 +1043,17 @@ Rules:
   instructions specify otherwise. NEVER attempt to detect heel rise from keypoint y-positions
   directly — use only the _heel_rise() helper.
 - When the instructions mention knees over toes, shin angle, or forward knee travel: include
-  _best_knee_bend(), _depth_frames(), and _avg_shin_angle() copied verbatim from the
-  LOWER-BODY SIDE-VIEW HELPERS section above. Use threshold > 30° unless instructions specify
-  otherwise. NEVER compare knee x-position to foot_index x-position — this is geometrically
-  unreliable. ALWAYS use left_shin_angle / right_shin_angle from pose_data.
+  _best_knee_bend() and _depth_frames() copied verbatim from the LOWER-BODY SIDE-VIEW HELPERS
+  section above. For MediaPipe: also include _avg_shin_angle() and use threshold > 30°. For
+  YOLO11: use _leg_side_for_forward_ratio() + _knee_forward_ratio() + _second_highest() from
+  the POSE ESTIMATION BACKEND section above (NOT sorted() — see sandbox builtins rule),
+  with threshold > 0.35. Geometry: ratio = sin(shin_tilt_from_vertical); foot
+  ≈ 0.7× shin length so true knee-over-toes = ratio ~0.70. YOLO11 under-reports by ~60-70%,
+  so a truly excessive forward position reads ~0.35-0.55 in practice. A good deep squat with
+  YOLO11 reads roughly 0.26-0.42, and the 0.26-0.42 vs 0.35 margin is too thin to fully avoid
+  occasional false positives/negatives — treat 0.35 as a starting point to refine from real
+  session data, not a validated constant. NEVER compare knee x-position to foot_index
+  x-position — this is geometrically unreliable.
 - Return ONLY valid Python code. No markdown fences. No explanations.
 """
 
@@ -833,7 +1070,8 @@ class LLMService:
                         boundary_values: str,
                         display_values: str,
                         session_duration_secs: int,
-                        feedback_mode: list | None = None) -> dict:
+                        feedback_mode: list | None = None,
+                        pose_backend: str = "mediapipe") -> dict:
         """Call Claude, validate the result, store it. Returns the saved module dict."""
         reference_data = None
         ex = self.ex_svc.get(exercise_id)
@@ -853,17 +1091,20 @@ class LLMService:
             session_duration_secs=session_duration_secs,
             reference_data=reference_data,
             feedback_mode=feedback_mode or ["after_window"],
+            pose_backend=pose_backend,
         )
         response_text = ""
         status = "failed"
         for attempt in range(1, 3):
             try:
                 message = self._client.messages.create(
-                    model="claude-sonnet-4-6",
+                    model="claude-sonnet-5",
                     max_tokens=8192,
                     messages=[{"role": "user", "content": prompt}],
                 )
-                response_text = message.content[0].text.strip()
+                response_text = "".join(
+                    block.text for block in message.content if block.type == "text"
+                ).strip()
                 validation = validate_module(response_text, feedback_mode=feedback_mode or ["after_window"])
                 if validation["valid"]:
                     status = "validated"

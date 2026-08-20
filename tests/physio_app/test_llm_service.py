@@ -37,7 +37,7 @@ def test_build_prompt_contains_angle_fields():
 def test_generate_module_success(tmp_db, mocker):
     mock_client = MagicMock()
     mock_client.messages.create.return_value = MagicMock(
-        content=[MagicMock(text=_VALID_MODULE_RESPONSE)]
+        content=[MagicMock(type="text", text=_VALID_MODULE_RESPONSE)]
     )
     mocker.patch("physio_app.services.llm_service.anthropic.Anthropic", return_value=mock_client)
 
@@ -61,7 +61,7 @@ def test_generate_module_success(tmp_db, mocker):
 def test_generate_module_logs_api_call(tmp_db, mocker):
     mock_client = MagicMock()
     mock_client.messages.create.return_value = MagicMock(
-        content=[MagicMock(text=_VALID_MODULE_RESPONSE)]
+        content=[MagicMock(type="text", text=_VALID_MODULE_RESPONSE)]
     )
     mocker.patch("physio_app.services.llm_service.anthropic.Anthropic", return_value=mock_client)
 
@@ -133,7 +133,7 @@ def test_build_prompt_omits_reference_section_when_empty_dict():
 def test_generate_module_calls_video_analyzer_when_video_exists(tmp_db, mocker, tmp_path):
     mock_client = MagicMock()
     mock_client.messages.create.return_value = MagicMock(
-        content=[MagicMock(text=_VALID_MODULE_RESPONSE)]
+        content=[MagicMock(type="text", text=_VALID_MODULE_RESPONSE)]
     )
     mocker.patch("physio_app.services.llm_service.anthropic.Anthropic", return_value=mock_client)
 
@@ -170,7 +170,7 @@ def test_generate_module_calls_video_analyzer_when_video_exists(tmp_db, mocker, 
 def test_generate_module_skips_video_analyzer_when_no_video(tmp_db, mocker):
     mock_client = MagicMock()
     mock_client.messages.create.return_value = MagicMock(
-        content=[MagicMock(text=_VALID_MODULE_RESPONSE)]
+        content=[MagicMock(type="text", text=_VALID_MODULE_RESPONSE)]
     )
     mocker.patch("physio_app.services.llm_service.anthropic.Anthropic", return_value=mock_client)
     mock_analyze = mocker.patch("physio_app.services.llm_service.analyze_reference_video")
@@ -199,7 +199,7 @@ def test_generate_module_skips_video_analyzer_when_no_video(tmp_db, mocker):
 def test_generate_module_proceeds_when_video_analyzer_returns_empty(tmp_db, mocker, tmp_path):
     mock_client = MagicMock()
     mock_client.messages.create.return_value = MagicMock(
-        content=[MagicMock(text=_VALID_MODULE_RESPONSE)]
+        content=[MagicMock(type="text", text=_VALID_MODULE_RESPONSE)]
     )
     mocker.patch("physio_app.services.llm_service.anthropic.Anthropic", return_value=mock_client)
     mocker.patch("physio_app.services.llm_service.analyze_reference_video", return_value={})

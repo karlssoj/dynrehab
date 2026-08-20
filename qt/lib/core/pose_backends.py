@@ -1,6 +1,9 @@
 from abc import ABC, abstractmethod
+import time
 import cv2
 import numpy as np
+
+from core.one_euro_filter import OneEuroFilter
 
 POSE_CONNECTIONS = [
     ("left_shoulder", "right_shoulder"), ("left_shoulder", "left_elbow"),
@@ -94,6 +97,26 @@ class MediaPipeBackend(PoseBackend):
         self._pose.close()
 
 
+class _KeypointState:
+    """Per-keypoint smoothing + hold-last-known-position state for YOLOBackend."""
+
+    __slots__ = ("filter_x", "filter_y", "last_pos", "last_conf", "last_seen_time")
+
+    def __init__(self, min_cutoff: float, beta: float, d_cutoff: float):
+        self.filter_x = OneEuroFilter(min_cutoff, beta, d_cutoff)
+        self.filter_y = OneEuroFilter(min_cutoff, beta, d_cutoff)
+        self.last_pos: tuple[float, float] | None = None
+        self.last_conf: float = 0.0
+        self.last_seen_time: float = 0.0
+
+    def reset(self) -> None:
+        self.filter_x.reset()
+        self.filter_y.reset()
+        self.last_pos = None
+        self.last_conf = 0.0
+        self.last_seen_time = 0.0
+
+
 class YOLOBackend(PoseBackend):
     _YOLO_TO_NAME = {
         0: "nose", 1: "left_eye", 2: "right_eye", 3: "left_ear", 4: "right_ear",
@@ -102,14 +125,34 @@ class YOLOBackend(PoseBackend):
         13: "left_knee", 14: "right_knee", 15: "left_ankle", 16: "right_ankle",
     }
 
-    def __init__(self, model_path: str = "yolo11n-pose.pt"):
+    # One Euro Filter tuning for slow-to-moderate exercise movements (squats):
+    # low min_cutoff favors smoothing at rest, small nonzero beta lets the
+    # filter track fast motion (e.g. standing up quickly) without much lag.
+    _DEFAULT_MIN_CUTOFF = 1.0
+    _DEFAULT_BETA = 0.05
+    _DEFAULT_D_CUTOFF = 1.0
+    # How long to keep emitting the last known position after confidence
+    # drops below _CONF_THRESHOLD, before treating the keypoint as lost.
+    _DEFAULT_HOLD_MAX_SECONDS = 0.25
+
+    def __init__(self, model_path: str = "yolo11n-pose.pt",
+                 min_cutoff: float = _DEFAULT_MIN_CUTOFF,
+                 beta: float = _DEFAULT_BETA,
+                 d_cutoff: float = _DEFAULT_D_CUTOFF,
+                 hold_max_seconds: float = _DEFAULT_HOLD_MAX_SECONDS):
         from ultralytics import YOLO
         self._model = YOLO(model_path)
+        self._min_cutoff = min_cutoff
+        self._beta = beta
+        self._d_cutoff = d_cutoff
+        self._hold_max_seconds = hold_max_seconds
+        self._filter_state: dict[str, _KeypointState] = {}
 
     def process(self, frame: np.ndarray,
                 highlight_joints: frozenset = frozenset()) -> tuple[dict, np.ndarray]:
         results = self._model(frame, verbose=False)
         annotated = frame.copy()
+        now = time.time()
 
         for r in results:
             if r.keypoints is None or r.keypoints.shape[0] == 0:
@@ -119,11 +162,35 @@ class YOLOBackend(PoseBackend):
             conf = (r.keypoints.conf[0].cpu().numpy()
                     if r.keypoints.conf is not None else np.ones(17))
 
-            keypoints = {
-                name: (float(xyn[idx, 0]), float(xyn[idx, 1]), 0.0, float(conf[idx]))
-                for idx, name in self._YOLO_TO_NAME.items()
-                if idx < len(xyn) and conf[idx] >= _CONF_THRESHOLD
-            }
+            keypoints = {}
+            for idx, name in self._YOLO_TO_NAME.items():
+                if idx >= len(xyn):
+                    continue
+                raw_conf = float(conf[idx])
+                state = self._filter_state.get(name)
+
+                if raw_conf >= _CONF_THRESHOLD:
+                    if state is None:
+                        state = _KeypointState(self._min_cutoff, self._beta, self._d_cutoff)
+                        self._filter_state[name] = state
+                    x = state.filter_x.filter(float(xyn[idx, 0]), now)
+                    y = state.filter_y.filter(float(xyn[idx, 1]), now)
+                    state.last_pos = (x, y)
+                    state.last_conf = raw_conf
+                    state.last_seen_time = now
+                    keypoints[name] = (x, y, 0.0, raw_conf)
+                elif state is not None and state.last_pos is not None:
+                    if now - state.last_seen_time <= self._hold_max_seconds:
+                        x, y = state.last_pos
+                        keypoints[name] = (x, y, 0.0, state.last_conf)
+                    else:
+                        # Grace period expired: treat as truly lost and reset
+                        # so a later reappearance isn't smoothed/lagged
+                        # against a now-stale position.
+                        state.reset()
+                        del self._filter_state[name]
+                # else: never detected yet and still below threshold -> omit.
+
             return keypoints, _draw_skeleton(annotated, keypoints, highlight_joints)
 
         return {}, annotated
@@ -135,6 +202,6 @@ class YOLOBackend(PoseBackend):
 def create_backend(config: dict) -> PoseBackend:
     """Instantiate the pose backend named in config['pose_backend'] (default: 'mediapipe')."""
     name = config.get("pose_backend", "mediapipe").lower()
-    if name == "yolo":
+    if name in ("yolo", "yolo11"):
         return YOLOBackend(config.get("yolo_model", "yolo11n-pose.pt"))
     return MediaPipeBackend()

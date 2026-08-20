@@ -91,3 +91,9 @@ def _migrate(conn: sqlite3.Connection):
             "ALTER TABLE exercises ADD COLUMN feedback_mode TEXT DEFAULT '[\"after_window\"]'"
         )
         conn.commit()
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(exercises)")}
+    if "pose_backend" not in cols:
+        conn.execute(
+            "ALTER TABLE exercises ADD COLUMN pose_backend TEXT DEFAULT 'mediapipe'"
+        )
+        conn.commit()

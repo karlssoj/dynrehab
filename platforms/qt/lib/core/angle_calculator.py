@@ -99,9 +99,33 @@ def calculate_angles(keypoints: dict) -> dict:
 
     All angles are computed from x,y coordinates only — z is ignored throughout
     because MediaPipe depth estimates are too noisy for reliable angle calculation.
+
+    Guard rule: any angle whose required landmarks are absent (visibility == 0.0,
+    which is the sentinel value returned when a keypoint was not detected) is
+    returned as 0.0 rather than as a spurious non-zero value computed from
+    default (0,0) positions.  This matters most for YOLO, which excludes
+    low-confidence keypoints from its output dictionary entirely.
     """
     def lm(name):
         return keypoints.get(name, (0.0, 0.0, 0.0, 0.0))
+
+    def ang(*pts):
+        """_angle_frontal_plane guarded: 0.0 if any landmark is absent."""
+        if any(p[3] == 0.0 for p in pts):
+            return 0.0
+        return _angle_frontal_plane(*pts)
+
+    def bend(*pts):
+        """(180 - angle) guarded: 0.0 if any landmark is absent."""
+        if any(p[3] == 0.0 for p in pts):
+            return 0.0
+        return 180.0 - _angle_frontal_plane(*pts)
+
+    def lean(a, b):
+        """_trunk_lean_2d guarded: 0.0 if either landmark is absent."""
+        if a[3] == 0.0 or b[3] == 0.0:
+            return 0.0
+        return _trunk_lean_2d(a, b)
 
     ls = lm("left_shoulder")
     rs = lm("right_shoulder")
@@ -112,41 +136,41 @@ def calculate_angles(keypoints: dict) -> dict:
 
     return {
         # Raw angles — ~180° when joint is straight, decreases as it bends
-        "left_knee_angle":      _angle_frontal_plane(lm("left_hip"),    lm("left_knee"),    lm("left_ankle")),
-        "right_knee_angle":     _angle_frontal_plane(lm("right_hip"),   lm("right_knee"),   lm("right_ankle")),
-        "left_hip_angle":       _angle_frontal_plane(lm("left_shoulder"),  lm("left_hip"),  lm("left_knee")),
-        "right_hip_angle":      _angle_frontal_plane(lm("right_shoulder"), lm("right_hip"), lm("right_knee")),
-        "left_ankle_angle":     _angle_frontal_plane(lm("left_knee"),   lm("left_ankle"),   lm("left_foot_index")),
-        "right_ankle_angle":    _angle_frontal_plane(lm("right_knee"),  lm("right_ankle"),  lm("right_foot_index")),
-        "left_shoulder_angle":  _angle_frontal_plane(lm("left_elbow"),  lm("left_shoulder"),  lm("left_hip")),
-        "right_shoulder_angle": _angle_frontal_plane(lm("right_elbow"), lm("right_shoulder"), lm("right_hip")),
-        "left_elbow_angle":     _angle_frontal_plane(lm("left_shoulder"),  lm("left_elbow"),  lm("left_wrist")),
-        "right_elbow_angle":    _angle_frontal_plane(lm("right_shoulder"), lm("right_elbow"), lm("right_wrist")),
-        "left_wrist_angle":     _angle_frontal_plane(lm("left_elbow"),  lm("left_wrist"),  lm("left_index")),
-        "right_wrist_angle":    _angle_frontal_plane(lm("right_elbow"), lm("right_wrist"), lm("right_index")),
-        "trunk_lean_angle":     _trunk_lean_2d(hip_mid, shoulder_mid),
-        "neck_angle":           _angle_frontal_plane(hip_mid, shoulder_mid, lm("nose")),
+        "left_knee_angle":      ang(lm("left_hip"),    lm("left_knee"),    lm("left_ankle")),
+        "right_knee_angle":     ang(lm("right_hip"),   lm("right_knee"),   lm("right_ankle")),
+        "left_hip_angle":       ang(lm("left_shoulder"),  lm("left_hip"),  lm("left_knee")),
+        "right_hip_angle":      ang(lm("right_shoulder"), lm("right_hip"), lm("right_knee")),
+        "left_ankle_angle":     ang(lm("left_knee"),   lm("left_ankle"),   lm("left_foot_index")),
+        "right_ankle_angle":    ang(lm("right_knee"),  lm("right_ankle"),  lm("right_foot_index")),
+        "left_shoulder_angle":  ang(lm("left_elbow"),  lm("left_shoulder"),  lm("left_hip")),
+        "right_shoulder_angle": ang(lm("right_elbow"), lm("right_shoulder"), lm("right_hip")),
+        "left_elbow_angle":     ang(lm("left_shoulder"),  lm("left_elbow"),  lm("left_wrist")),
+        "right_elbow_angle":    ang(lm("right_shoulder"), lm("right_elbow"), lm("right_wrist")),
+        "left_wrist_angle":     ang(lm("left_elbow"),  lm("left_wrist"),  lm("left_index")),
+        "right_wrist_angle":    ang(lm("right_elbow"), lm("right_wrist"), lm("right_index")),
+        "trunk_lean_angle":     lean(hip_mid, shoulder_mid),
+        "neck_angle":           ang(hip_mid, shoulder_mid, lm("nose")),
         "pelvic_tilt":          _vector_to_horizontal_angle(lm("left_hip"), lm("right_hip")),
-        "left_hka_alignment":   _angle_frontal_plane(lm("left_hip"),  lm("left_knee"),  lm("left_ankle")),
-        "right_hka_alignment":  _angle_frontal_plane(lm("right_hip"), lm("right_knee"), lm("right_ankle")),
-        "left_arm_elevation":   _angle_frontal_plane(lm("left_hip"),  lm("left_shoulder"),  lm("left_wrist")),
-        "right_arm_elevation":  _angle_frontal_plane(lm("right_hip"), lm("right_shoulder"), lm("right_wrist")),
+        "left_hka_alignment":   ang(lm("left_hip"),  lm("left_knee"),  lm("left_ankle")),
+        "right_hka_alignment":  ang(lm("right_hip"), lm("right_knee"), lm("right_ankle")),
+        "left_arm_elevation":   ang(lm("left_hip"),  lm("left_shoulder"),  lm("left_wrist")),
+        "right_arm_elevation":  ang(lm("right_hip"), lm("right_shoulder"), lm("right_wrist")),
         # Bend values — 0° = straight, increases as joint bends (= 180 − raw_angle)
-        "left_elbow_bend_2d":  180.0 - _angle_frontal_plane(lm("left_shoulder"),  lm("left_elbow"),  lm("left_wrist")),
-        "right_elbow_bend_2d": 180.0 - _angle_frontal_plane(lm("right_shoulder"), lm("right_elbow"), lm("right_wrist")),
-        "left_knee_bend_2d":   180.0 - _angle_frontal_plane(lm("left_hip"),   lm("left_knee"),   lm("left_ankle")),
-        "right_knee_bend_2d":  180.0 - _angle_frontal_plane(lm("right_hip"),  lm("right_knee"),  lm("right_ankle")),
-        "left_hip_bend_2d":    180.0 - _angle_frontal_plane(lm("left_shoulder"),  lm("left_hip"),  lm("left_knee")),
-        "right_hip_bend_2d":   180.0 - _angle_frontal_plane(lm("right_shoulder"), lm("right_hip"), lm("right_knee")),
-        "trunk_lean_2d":       _trunk_lean_2d(hip_mid, shoulder_mid),
+        "left_elbow_bend_2d":  bend(lm("left_shoulder"),  lm("left_elbow"),  lm("left_wrist")),
+        "right_elbow_bend_2d": bend(lm("right_shoulder"), lm("right_elbow"), lm("right_wrist")),
+        "left_knee_bend_2d":   bend(lm("left_hip"),   lm("left_knee"),   lm("left_ankle")),
+        "right_knee_bend_2d":  bend(lm("right_hip"),  lm("right_knee"),  lm("right_ankle")),
+        "left_hip_bend_2d":    bend(lm("left_shoulder"),  lm("left_hip"),  lm("left_knee")),
+        "right_hip_bend_2d":   bend(lm("right_shoulder"), lm("right_hip"), lm("right_knee")),
+        "trunk_lean_2d":       lean(hip_mid, shoulder_mid),
         "left_knee_valgus":    _signed_knee_valgus(lm("left_hip"),  lm("left_knee"),  lm("left_ankle"),  "left"),
         "right_knee_valgus":   _signed_knee_valgus(lm("right_hip"), lm("right_knee"), lm("right_ankle"), "right"),
         # Segment-from-vertical angles — primary for side view, also useful front view
         # Convention: 0° = segment vertical, increases as segment tilts away from vertical
-        "left_shin_angle":     _trunk_lean_2d(lm("left_ankle"),  lm("left_knee")),
-        "right_shin_angle":    _trunk_lean_2d(lm("right_ankle"), lm("right_knee")),
-        "left_thigh_angle":    _trunk_lean_2d(lm("left_knee"),   lm("left_hip")),
-        "right_thigh_angle":   _trunk_lean_2d(lm("right_knee"),  lm("right_hip")),
+        "left_shin_angle":     lean(lm("left_ankle"),  lm("left_knee")),
+        "right_shin_angle":    lean(lm("right_ankle"), lm("right_knee")),
+        "left_thigh_angle":    lean(lm("left_knee"),   lm("left_hip")),
+        "right_thigh_angle":   lean(lm("right_knee"),  lm("right_hip")),
         # Bilateral tilt angles — primary for front view
         # Convention: 0° = both landmarks level, increases as one side is higher/lower
         "shoulder_tilt":       _vector_to_horizontal_angle(lm("left_shoulder"), lm("right_shoulder")),

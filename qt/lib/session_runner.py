@@ -232,6 +232,7 @@ class SessionRunner:
         self._all_rounds.append({
             "round_number": self._round_number,
             "rep_count": self._round_rep_count,
+            "frames": list(self._round_frames),
             "duration_seconds": self._exercise_secs,
         })
         try:
@@ -247,11 +248,17 @@ class SessionRunner:
         self._feedback_type = "rep"
         self._state = "feedback"
         self._state_wall_start = time.time()
+        rep_frames = list(self._round_frames[-60:])
         rep_data = {
             "rep_number": self.rep_count,
             "round_number": self._round_number,
-            "frames": list(self._round_frames[-60:]),
+            "frames": rep_frames,
         }
+        self._all_rounds.append({
+            "round_number": self._round_number,
+            "rep_number": self.rep_count,
+            "frames": rep_frames,
+        })
         try:
             lines = self._generate_rep_feedback(rep_data) if self._generate_rep_feedback else None
             lines = list(lines) if lines else ["Good rep, keep going!"]

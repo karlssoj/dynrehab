@@ -59,6 +59,13 @@ class ExerciseEditorFrame(ctk.CTkFrame):
         ctk.CTkOptionMenu(left, variable=self.view_var,
                           values=["side", "front", "back"]).pack(fill="x", pady=(0, 12))
 
+        ctk.CTkLabel(left, text="Pose Estimation Backend").pack(anchor="w")
+        ctk.CTkLabel(left, text="YOLO11: 17 keypoints only — heel, foot, and finger landmarks unavailable",
+                     text_color="gray", font=ctk.CTkFont(size=11)).pack(anchor="w")
+        self.pose_backend_var = ctk.StringVar(value="mediapipe")
+        ctk.CTkOptionMenu(left, variable=self.pose_backend_var,
+                          values=["mediapipe", "yolo11"]).pack(fill="x", pady=(0, 12))
+
         ctk.CTkLabel(left, text="Client Instructions").pack(anchor="w")
         ctk.CTkLabel(left, text="What the patient sees/hears before starting",
                      text_color="gray", font=ctk.CTkFont(size=11)).pack(anchor="w")
@@ -166,6 +173,7 @@ class ExerciseEditorFrame(ctk.CTkFrame):
         self._mode_rep_var.set("after_rep" in modes)
         self._mode_after_var.set("after_exercise" in modes)
         self._on_mode_changed()
+        self.pose_backend_var.set(ex.pose_backend or "mediapipe")
         if ex.reference_video_path:
             self._video_path = ex.reference_video_path
             self.video_status.configure(text=f"Video: {Path(ex.reference_video_path).name}")
@@ -294,6 +302,7 @@ class ExerciseEditorFrame(ctk.CTkFrame):
         return {
             "name": self.name_entry.get().strip() or "Unnamed Exercise",
             "camera_view": self.view_var.get(),
+            "pose_backend": self.pose_backend_var.get(),
             "client_instructions": self.client_instructions_text.get("1.0", "end").strip(),
             "llm_instructions": self.llm_instructions_text.get("1.0", "end").strip(),
             "boundary_values": self.boundary_values_text.get("1.0", "end").strip(),
@@ -312,6 +321,7 @@ class ExerciseEditorFrame(ctk.CTkFrame):
             display_values=f["display_values"],
             session_duration_secs=f["session_duration_secs"],
             feedback_mode=f["feedback_mode"],
+            pose_backend=f["pose_backend"],
         )
         return ex.id
 
@@ -332,6 +342,7 @@ class ExerciseEditorFrame(ctk.CTkFrame):
                 display_values=f["display_values"],
                 session_duration_secs=f["session_duration_secs"],
                 feedback_mode=f["feedback_mode"],
+                pose_backend=f["pose_backend"],
             )
         else:
             self.exercise_id = self._save_exercise()
@@ -351,6 +362,7 @@ class ExerciseEditorFrame(ctk.CTkFrame):
                 display_values=f["display_values"],
                 session_duration_secs=f["session_duration_secs"],
                 feedback_mode=json.loads(f["feedback_mode"]),
+                pose_backend=f["pose_backend"],
             )
             self.after(0, lambda: self._on_generation_done(module["status"]))
 

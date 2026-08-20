@@ -1,0 +1,185 @@
+POSE DATA FIELDS REFERENCE
+==========================
+All values computed by core/angle_calculator.py from a keypoints dict.
+Keypoints format: name → (x, y, z, visibility)  — x,y in [0,1], y increases downward.
+All angles computed from x,y only (z ignored — too noisy).
+
+BACKEND AVAILABILITY KEY
+  [BOTH]  — available from MediaPipe and YOLO11
+  [MP]    — MediaPipe only (returns 0.0 with YOLO11 due to missing landmarks)
+  [SIDE]  — most meaningful from a side-view camera
+  [FRONT] — most meaningful from a front-view camera
+
+YOLO11 missing landmarks: left/right_heel, left/right_foot_index, left/right_index (finger)
+MediaPipe provides all 33 landmarks. YOLO11 provides 17 COCO keypoints:
+  nose, left/right_eye, left/right_ear, left/right_shoulder, left/right_elbow,
+  left/right_wrist, left/right_hip, left/right_knee, left/right_ankle
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RAW JOINT ANGLES  (~180° = straight/extended, decreases as joint bends)
+*** DO NOT use in detect_rep or feedback logic — convention is reversed. ***
+*** Use the BEND VALUES section below instead.                            ***
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Field                     Landmarks used              Notes
+─────────────────────────────────────────────────────────────────────
+left_knee_angle     [BOTH] hip → knee → ankle         ~170° standing, ~90° deep squat
+right_knee_angle    [BOTH] hip → knee → ankle
+left_hip_angle      [BOTH] shoulder → hip → knee      ~180° standing, ~90° hip flexion
+right_hip_angle     [BOTH] shoulder → hip → knee
+left_ankle_angle    [MP]   knee → ankle → foot_index  0.0 with YOLO11 (foot_index absent)
+right_ankle_angle   [MP]   knee → ankle → foot_index  0.0 with YOLO11
+left_shoulder_angle [BOTH] elbow → shoulder → hip
+right_shoulder_angle[BOTH] elbow → shoulder → hip
+left_elbow_angle    [BOTH] shoulder → elbow → wrist   ~180° straight, ~45° fully bent
+right_elbow_angle   [BOTH] shoulder → elbow → wrist
+left_wrist_angle    [MP]   elbow → wrist → index      0.0 with YOLO11 (finger absent)
+right_wrist_angle   [MP]   elbow → wrist → index      0.0 with YOLO11
+trunk_lean_angle    [BOTH] hip_mid → shoulder_mid      0° = upright; see trunk_lean_2d below
+neck_angle          [BOTH] hip_mid → shoulder_mid → nose  angle of head relative to trunk
+left_hka_alignment  [FRONT]hip → knee → ankle         IDENTICAL to left_knee_angle.
+right_hka_alignment [FRONT]hip → knee → ankle         WARNING: unsigned — fires for both
+                                                       valgus AND varus. Use knee_valgus
+                                                       fields for direction.
+left_arm_elevation  [BOTH] hip → shoulder → wrist     0° = arm at side, 90° = horizontal
+right_arm_elevation [BOTH] hip → shoulder → wrist     180° = overhead
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+BEND VALUES  (0° = straight, increases as joint bends — USE THESE in all analysis code)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Computed as: bend = 180° − raw_angle
+
+Field                     Landmarks used              Clinical scale
+─────────────────────────────────────────────────────────────────────
+left_knee_bend_2d   [BOTH] hip → knee → ankle         0°=straight, 45°=quarter squat,
+right_knee_bend_2d  [BOTH] hip → knee → ankle         70°=half squat, 90°=parallel squat
+                                                       (thigh horizontal = physio target).
+                                                       "Full squat" threshold: min 75°.
+left_hip_bend_2d    [BOTH] shoulder → hip → knee      0°=upright, 45°=moderate flexion,
+right_hip_bend_2d   [BOTH] shoulder → hip → knee      90°=hip at right angle.
+                                                       "Full" threshold: min 60°.
+left_elbow_bend_2d  [BOTH] shoulder → elbow → wrist   0°=straight arm, 70°=right angle,
+right_elbow_bend_2d [BOTH] shoulder → elbow → wrist   120°=hand near shoulder.
+                                                       "Full curl" threshold: min 70°.
+trunk_lean_2d       [BOTH] hip_mid → shoulder_mid      0°=upright, increases leaning forward.
+                                                       IDENTICAL to trunk_lean_angle —
+                                                       always use trunk_lean_2d.
+                                                       SIDE: forward lean. FRONT: side-bend.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SEGMENT-FROM-VERTICAL ANGLES  (0° = segment vertical, increases as it tilts)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Field                     Landmarks used              Notes
+─────────────────────────────────────────────────────────────────────
+left_shin_angle     [BOTH] ankle → knee               Shin from vertical. SIDE: forward lean
+right_shin_angle    [BOTH] ankle → knee               of shin = knees-over-toes proxy.
+                                                       0° = shin vertical. ~20–30° typical squat.
+                                                       WARNING: YOLO11 measures smaller values
+                                                       (~15–25°) than MediaPipe (~30–35°) for
+                                                       the same physical pose in side view.
+left_thigh_angle    [BOTH] knee → hip                 Thigh from vertical. SIDE: squat depth.
+right_thigh_angle   [BOTH] knee → hip                 0° = standing, 45° = quarter squat,
+                                                       90° = thigh horizontal (parallel squat).
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SIGNED VALGUS ANGLE  (frontal-plane knee alignment)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Field                     Landmarks used              Notes
+─────────────────────────────────────────────────────────────────────
+left_knee_valgus    [BOTH] hip → knee → ankle         0° = collinear (ideal alignment)
+right_knee_valgus   [BOTH] hip → knee → ankle         Positive = valgus (knee caving inward)
+                                                       Negative = varus (knee bowing outward)
+                                                       ±3° = clinically meaningful
+                                                       ±5° = clearly visible
+                                                       ±10° = severe
+                                                       Best used from FRONT-view camera.
+                                                       NEVER use abs() — sign is the direction.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+BILATERAL TILT ANGLES  (0° = both landmarks level)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Field                     Landmarks used              Notes
+─────────────────────────────────────────────────────────────────────
+pelvic_tilt         [FRONT]left_hip → right_hip       Angle of hip line from horizontal.
+                                                       WARNING: reads ~180° when hips are level
+                                                       on front camera. Use the _pelvic_tilt_2d()
+                                                       helper instead (see LLM prompt helpers).
+shoulder_tilt       [BOTH] left_shoulder → right_shoulder  0° = shoulders level.
+                                                       Detects dropped shoulder, scoliosis cues.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+LATERAL SPAN VALUES  (normalised image x-axis distance between bilateral pairs)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+~0 when body is fully sideways to camera; ~0.2–0.4 when facing forward/backward.
+
+Field                     Landmarks used              Notes
+─────────────────────────────────────────────────────────────────────
+shoulder_lateral_span[BOTH]abs(right_shoulder_x       Profile stance detection.
+                            − left_shoulder_x)        < 0.10–0.15 = side-on to camera.
+                                                       > 0.15 = facing camera.
+                                                       Use in detect_rep to reject
+                                                       non-profile frames.
+hip_lateral_span    [BOTH] abs(right_hip_x            Same interpretation as shoulder span.
+                            − left_hip_x)
+knee_lateral_span   [BOTH] abs(left_knee_x
+                            − right_knee_x)
+ankle_lateral_span  [BOTH] abs(left_ankle_x           In side profile: ~0 = feet side by side;
+                            − right_ankle_x)          > 0.20 = one foot significantly in front
+                                                       of the other (staggered stance).
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+BODY ROTATION (depth-based)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Field                     Landmarks used              Notes
+─────────────────────────────────────────────────────────────────────
+body_rotation_z     [BOTH] left_shoulder_z            Positive = right side closer to camera
+                           − right_shoulder_z         (right-profile stance).
+                                                       Negative = left side closer to camera.
+                                                       z is noisier than x/y — treat as a
+                                                       directional hint only, not a precise value.
+                                                       YOLO11 z is particularly unreliable.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RAW KEYPOINTS  (available directly via pose_data["keypoints"])
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Format: pose_data["keypoints"][name] → (x, y, z, visibility)
+
+Available with BOTH MediaPipe and YOLO11:
+  nose
+  left_shoulder,  right_shoulder
+  left_elbow,     right_elbow
+  left_wrist,     right_wrist
+  left_hip,       right_hip
+  left_knee,      right_knee
+  left_ankle,     right_ankle
+
+Available with MediaPipe ONLY (absent from YOLO11 keypoints dict entirely):
+  left_heel,       right_heel
+  left_foot_index, right_foot_index
+  left_index,      right_index   (finger tip)
+  left_eye,        right_eye     (MediaPipe also provides eye/ear/mouth landmarks
+  left_ear,        right_ear      but these are not used in angle_calculator)
+
+YOLO11 keypoints with confidence < 0.3 are excluded from the dict entirely.
+MediaPipe always includes all 33 landmarks; low-confidence ones have low visibility scores.
+Guard pattern for missing keypoints: visibility == 0.0 is the sentinel (absent).
+angle_calculator returns 0.0 for any angle whose required landmarks are absent.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+YOLO11 SUMMARY — fields that always return 0.0
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  left_ankle_angle   — requires foot_index
+  right_ankle_angle  — requires foot_index
+  left_wrist_angle   — requires index finger
+  right_wrist_angle  — requires index finger
+  _heel_rise()       — requires heel + foot_index (helper function, not a field)
+
+All other fields in this document return valid values with YOLO11.
