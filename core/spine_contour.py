@@ -29,11 +29,14 @@ _MIN_CHORD_PX = 40        # skip if hip-shoulder pixel distance is smaller than 
 
 def crop_and_rotate_roi(frame: np.ndarray, hip_px: tuple[float, float],
                          shoulder_px: tuple[float, float]
-                         ) -> tuple[np.ndarray, tuple[float, float], tuple[float, float], float] | None:
+                         ) -> tuple[np.ndarray, tuple[float, float], tuple[float, float], float, np.ndarray] | None:
     """Rotate/crop `frame` so the hip->shoulder segment becomes vertical and
-    centered. Returns (rotated_image, hip_point, shoulder_point, chord_len) in
-    the rotated image's coordinate space, or None if the chord is too short
-    to be reliable."""
+    centered. Returns (rotated_image, hip_point, shoulder_point, chord_len, M)
+    where hip_point/shoulder_point are in the rotated image's coordinate
+    space and M is the affine matrix used to produce it (invert with
+    cv2.invertAffineTransform to map ROI-space points back to the original
+    frame, e.g. for drawing the back contour on the source video). Returns
+    None if the chord is too short to be reliable."""
     hip_x, hip_y = hip_px
     shoulder_x, shoulder_y = shoulder_px
     dx = shoulder_x - hip_x
@@ -57,7 +60,7 @@ def crop_and_rotate_roi(frame: np.ndarray, hip_px: tuple[float, float],
 
     hip_point = (out_w / 2.0, out_h / 2.0 + chord_len / 2.0)
     shoulder_point = (out_w / 2.0, out_h / 2.0 - chord_len / 2.0)
-    return rotated, hip_point, shoulder_point, chord_len
+    return rotated, hip_point, shoulder_point, chord_len, M
 
 
 def extract_back_contour(mask: np.ndarray, hip_point: tuple[float, float],
@@ -119,3 +122,28 @@ def signed_curvature_ratio(left_profile: list[float], right_profile: list[float]
     deviations = [back_profile[i] - straight_at(i) for i in range(n)]
     peak = max(deviations, key=abs)
     return peak / chord_len
+
+
+def back_contour_points_in_frame(M: np.ndarray, hip_point: tuple[float, float],
+                                  shoulder_point: tuple[float, float],
+                                  back_profile: list[float],
+                                  on_right_side: bool) -> list[tuple[float, float]]:
+    """Reconstruct each back_profile row's pixel position in the rotated
+    ROI's coordinate space, then map every point back into the original
+    (pre-rotation) frame using the inverse of M — the same affine matrix
+    crop_and_rotate_roi built to produce that ROI. on_right_side: True if
+    back_profile is right_profile (image-right of the ROI's vertical
+    centerline), False if it's left_profile (image-left). Returns an empty
+    list if back_profile is empty."""
+    if not back_profile:
+        return []
+
+    sign = 1.0 if on_right_side else -1.0
+    roi_points = np.array([
+        [[hip_point[0] + sign * dist, shoulder_point[1] + i]]
+        for i, dist in enumerate(back_profile)
+    ], dtype=np.float32)
+
+    M_inv = cv2.invertAffineTransform(M)
+    original_points = cv2.transform(roi_points, M_inv).reshape(-1, 2)
+    return [(float(x), float(y)) for x, y in original_points]

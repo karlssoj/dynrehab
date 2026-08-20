@@ -2,7 +2,9 @@ import pytest
 import numpy as np
 import cv2
 
-from core.spine_contour import facing_left, crop_and_rotate_roi, extract_back_contour, signed_curvature_ratio, _MIN_CHORD_PX, _ROI_MARGIN_FRAC, _ROI_END_PAD_FRAC
+from core.spine_contour import (facing_left, crop_and_rotate_roi, extract_back_contour,
+                                  signed_curvature_ratio, back_contour_points_in_frame,
+                                  _MIN_CHORD_PX, _ROI_MARGIN_FRAC, _ROI_END_PAD_FRAC)
 
 
 def test_facing_left_true_when_nose_left_of_shoulder():
@@ -47,7 +49,7 @@ def test_crop_and_rotate_roi_output_canvas_size():
     shoulder_px = (200.0, 150.0)  # chord_len = 150, already vertical
     result = crop_and_rotate_roi(frame, hip_px, shoulder_px)
     assert result is not None
-    rotated, hip_point, shoulder_point, chord_len = result
+    rotated, hip_point, shoulder_point, chord_len, M = result
     assert chord_len == pytest.approx(150.0, abs=0.5)
     expected_w = round(chord_len * (1 + 2 * _ROI_MARGIN_FRAC))
     expected_h = round(chord_len * (1 + 2 * _ROI_END_PAD_FRAC))
@@ -61,7 +63,7 @@ def test_crop_and_rotate_roi_hip_and_shoulder_points_are_vertically_aligned():
     shoulder_px = (250.0, 150.0)  # tilted chord
     result = crop_and_rotate_roi(frame, hip_px, shoulder_px)
     assert result is not None
-    rotated, hip_point, shoulder_point, chord_len = result
+    rotated, hip_point, shoulder_point, chord_len, M = result
     assert hip_point[0] == pytest.approx(shoulder_point[0], abs=0.5)
     assert hip_point[1] > shoulder_point[1]
     assert abs(hip_point[1] - shoulder_point[1]) == pytest.approx(chord_len, abs=0.5)
@@ -74,7 +76,7 @@ def test_crop_and_rotate_roi_marker_lands_at_hip_point():
     cv2.circle(frame, (int(hip_px[0]), int(hip_px[1])), 3, (255, 255, 255), -1)
     result = crop_and_rotate_roi(frame, hip_px, shoulder_px)
     assert result is not None
-    rotated, hip_point, shoulder_point, chord_len = result
+    rotated, hip_point, shoulder_point, chord_len, M = result
     region = rotated[int(hip_point[1]) - 4:int(hip_point[1]) + 4,
                       int(hip_point[0]) - 4:int(hip_point[0]) + 4]
     assert region.max() > 200
@@ -93,7 +95,7 @@ def test_crop_and_rotate_roi_both_markers_land_at_expected_points_for_tilted_cho
     cv2.circle(frame, (int(shoulder_px[0]), int(shoulder_px[1])), 3, (255, 255, 255), -1)
     result = crop_and_rotate_roi(frame, hip_px, shoulder_px)
     assert result is not None
-    rotated, hip_point, shoulder_point, chord_len = result
+    rotated, hip_point, shoulder_point, chord_len, M = result
 
     hip_region = rotated[int(hip_point[1]) - 4:int(hip_point[1]) + 4,
                           int(hip_point[0]) - 4:int(hip_point[0]) + 4]
@@ -109,8 +111,30 @@ def test_crop_and_rotate_roi_at_min_chord_boundary_is_not_none():
     shoulder_px = (100.0, 100.0 + _MIN_CHORD_PX)  # exactly at the boundary
     result = crop_and_rotate_roi(frame, hip_px, shoulder_px)
     assert result is not None
-    _, _, _, chord_len = result
+    _, _, _, chord_len, M = result
     assert chord_len == pytest.approx(_MIN_CHORD_PX, abs=0.01)
+
+
+def test_crop_and_rotate_roi_matrix_round_trips_hip_and_shoulder_points():
+    # M must be invertible and map hip_point/shoulder_point (rotated-ROI
+    # space) back to hip_px/shoulder_px (original frame space) -- this is
+    # exactly what the back-contour visualisation needs to draw the contour
+    # on the original video frame instead of the rotated ROI.
+    frame = np.zeros((400, 400, 3), dtype=np.uint8)
+    hip_px = (150.0, 300.0)
+    shoulder_px = (250.0, 150.0)
+    result = crop_and_rotate_roi(frame, hip_px, shoulder_px)
+    assert result is not None
+    rotated, hip_point, shoulder_point, chord_len, M = result
+
+    M_inv = cv2.invertAffineTransform(M)
+    pts = np.array([[hip_point], [shoulder_point]], dtype=np.float32)
+    back = cv2.transform(pts, M_inv).reshape(-1, 2)
+
+    assert back[0][0] == pytest.approx(hip_px[0], abs=0.5)
+    assert back[0][1] == pytest.approx(hip_px[1], abs=0.5)
+    assert back[1][0] == pytest.approx(shoulder_px[0], abs=0.5)
+    assert back[1][1] == pytest.approx(shoulder_px[1], abs=0.5)
 
 
 def _make_straight_mask(width=100, height=100, half_width=20, center_x=50):
@@ -244,7 +268,7 @@ def test_facing_left_and_profile_split_agree_end_to_end():
 
     result = crop_and_rotate_roi(frame, hip_px, shoulder_px)
     assert result is not None
-    rotated, hip_point, shoulder_point, chord_len = result
+    rotated, hip_point, shoulder_point, chord_len, M = result
 
     out_h, out_w = rotated.shape[:2]
     center_x = int(round(hip_point[0]))
@@ -272,3 +296,54 @@ def test_facing_left_and_profile_split_agree_end_to_end():
     # centerline -> right_profile carries it -> facing_left True selects
     # right_profile as back_profile -> ratio must be positive.
     assert ratio > 0
+
+
+def test_back_contour_points_in_frame_maps_right_side_points_back_to_original_frame():
+    # Vertical, untilted chord -> crop_and_rotate_roi's M is a pure
+    # translation (no rotation), so the round trip has simple, exact
+    # expected values: for on_right_side=True, orig_x = hip_px[0] + dist_i,
+    # orig_y = shoulder_px[1] + i (row i is `i` pixels below the shoulder).
+    frame = np.zeros((400, 400, 3), dtype=np.uint8)
+    hip_px = (200.0, 300.0)
+    shoulder_px = (200.0, 150.0)
+    result = crop_and_rotate_roi(frame, hip_px, shoulder_px)
+    assert result is not None
+    _, hip_point, shoulder_point, chord_len, M = result
+
+    back_profile = [10.0, 12.0, 14.0]
+    points = back_contour_points_in_frame(M, hip_point, shoulder_point, back_profile,
+                                           on_right_side=True)
+
+    assert len(points) == 3
+    assert points[0] == (pytest.approx(210.0, abs=0.5), pytest.approx(150.0, abs=0.5))
+    assert points[1] == (pytest.approx(212.0, abs=0.5), pytest.approx(151.0, abs=0.5))
+    assert points[2] == (pytest.approx(214.0, abs=0.5), pytest.approx(152.0, abs=0.5))
+
+
+def test_back_contour_points_in_frame_maps_left_side_points_back_to_original_frame():
+    frame = np.zeros((400, 400, 3), dtype=np.uint8)
+    hip_px = (200.0, 300.0)
+    shoulder_px = (200.0, 150.0)
+    result = crop_and_rotate_roi(frame, hip_px, shoulder_px)
+    assert result is not None
+    _, hip_point, shoulder_point, chord_len, M = result
+
+    back_profile = [10.0, 12.0, 14.0]
+    points = back_contour_points_in_frame(M, hip_point, shoulder_point, back_profile,
+                                           on_right_side=False)
+
+    assert len(points) == 3
+    assert points[0] == (pytest.approx(190.0, abs=0.5), pytest.approx(150.0, abs=0.5))
+    assert points[1] == (pytest.approx(188.0, abs=0.5), pytest.approx(151.0, abs=0.5))
+    assert points[2] == (pytest.approx(186.0, abs=0.5), pytest.approx(152.0, abs=0.5))
+
+
+def test_back_contour_points_in_frame_empty_profile_gives_empty_points():
+    frame = np.zeros((400, 400, 3), dtype=np.uint8)
+    hip_px = (200.0, 300.0)
+    shoulder_px = (200.0, 150.0)
+    result = crop_and_rotate_roi(frame, hip_px, shoulder_px)
+    assert result is not None
+    _, hip_point, shoulder_point, chord_len, M = result
+
+    assert back_contour_points_in_frame(M, hip_point, shoulder_point, [], on_right_side=True) == []

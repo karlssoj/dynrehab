@@ -5,9 +5,10 @@ import cv2
 import numpy as np
 from core.data_contract import PoseFrame
 from core.angle_calculator import calculate_angles
-from core.pose_backends import POSE_CONNECTIONS, PoseBackend, MediaPipeBackend
+from core.pose_backends import POSE_CONNECTIONS, PoseBackend, MediaPipeBackend, draw_back_contour
 from core.spine_contour import (crop_and_rotate_roi, extract_back_contour,
-                                 signed_curvature_ratio, facing_left)
+                                 signed_curvature_ratio, facing_left,
+                                 back_contour_points_in_frame)
 
 # Kept for backwards compatibility — callers that imported LANDMARK_NAMES from here still work.
 LANDMARK_NAMES = {
@@ -40,6 +41,7 @@ class PoseEngine:
         self._lock = threading.Lock()
         self._seek_start = False
         self._last_spine_sample = 0.0
+        self._last_spine_points: list[tuple[float, float]] | None = None
 
     def seek_to_start(self):
         with self._lock:
@@ -111,7 +113,7 @@ class PoseEngine:
                                 shoulder_px = (shoulder[0] * w, shoulder[1] * h)
                                 roi_result = crop_and_rotate_roi(frame, hip_px, shoulder_px)
                                 if roi_result:
-                                    roi_image, hip_point, shoulder_point, chord_len = roi_result
+                                    roi_image, hip_point, shoulder_point, chord_len, M = roi_result
                                     mask = self._backend.get_segmentation_mask(roi_image)
                                     if mask is not None:
                                         profiles = extract_back_contour(mask, hip_point, shoulder_point)
@@ -119,6 +121,10 @@ class PoseEngine:
                                             face_left = facing_left(keypoints)
                                             if face_left is not None:
                                                 left_profile, right_profile = profiles
+                                                back_profile = right_profile if face_left else left_profile
+                                                self._last_spine_points = back_contour_points_in_frame(
+                                                    M, hip_point, shoulder_point, back_profile,
+                                                    on_right_side=face_left)
                                                 pose_frame.spine_curvature_ratio = signed_curvature_ratio(
                                                     left_profile, right_profile, chord_len, face_left)
                         except Exception:
@@ -129,6 +135,9 @@ class PoseEngine:
                             # _run() (frame capture, angle calculation, subscriber
                             # callbacks) must keep working regardless.
                             pass
+
+                    if self._last_spine_points:
+                        draw_back_contour(annotated, self._last_spine_points)
 
                 with self._lock:
                     subs = list(self._subscribers)

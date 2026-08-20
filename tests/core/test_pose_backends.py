@@ -275,3 +275,22 @@ def test_yolo_get_segmentation_mask_prefers_person_over_other_class(monkeypatch)
     # person_mask covers a 40x40 region out of 160x160, scaled to an 80x80
     # roi -> a 20x20 region of 255s, not the full chair-sized mask.
     assert (mask == 255).sum() == pytest.approx(20 * 20, abs=4)
+
+
+def test_draw_back_contour_draws_a_line_through_given_points():
+    from core.pose_backends import draw_back_contour
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+    points = [(20.0, 20.0), (50.0, 50.0), (80.0, 20.0)]
+    draw_back_contour(frame, points)
+    # A visible (non-background) pixel should exist near the middle point.
+    region = frame[46:54, 46:54]
+    assert region.max() > 0
+
+
+def test_draw_back_contour_no_op_for_fewer_than_two_points():
+    from core.pose_backends import draw_back_contour
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+    draw_back_contour(frame, [(20.0, 20.0)])
+    assert frame.max() == 0
+    draw_back_contour(frame, [])
+    assert frame.max() == 0
