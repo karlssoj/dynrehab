@@ -32,6 +32,12 @@ _SPINE_SAMPLE_INTERVAL_SECS = 0.25  # 4 Hz — see spec's measured performance b
 _SPINE_CONTOUR_POINT_COUNT = 10  # how many dots to draw along the back contour
 # Override via the SPINE_CONTOUR_POINT_COUNT env var (e.g. in .env).
 
+_SPINE_MAX_SHOULDER_LATERAL_SPAN = 0.15  # same threshold already used elsewhere
+# (see llm_service.py's side-view detect_rep guard) to mean "not facing the
+# camera" -- below this, left/right shoulder are close enough in x that the
+# person is standing roughly in profile, which the hip-shoulder-line geometry
+# this feature relies on assumes. Override via SPINE_MAX_SHOULDER_LATERAL_SPAN.
+
 
 def _should_sample_spine(last_sample_time: float, now: float,
                           interval: float = _SPINE_SAMPLE_INTERVAL_SECS) -> bool:
@@ -53,6 +59,8 @@ class PoseEngine:
             os.getenv("SPINE_SAMPLE_INTERVAL_SECS", _SPINE_SAMPLE_INTERVAL_SECS))
         self._spine_contour_point_count = int(
             os.getenv("SPINE_CONTOUR_POINT_COUNT", _SPINE_CONTOUR_POINT_COUNT))
+        self._spine_max_shoulder_lateral_span = float(
+            os.getenv("SPINE_MAX_SHOULDER_LATERAL_SPAN", _SPINE_MAX_SHOULDER_LATERAL_SPAN))
         self._spine_error_logged = False
         print(f"[pose_engine] spine sample interval: {self._spine_sample_interval}s "
               f"({'from SPINE_SAMPLE_INTERVAL_SECS env var' if 'SPINE_SAMPLE_INTERVAL_SECS' in os.environ else 'default'})")
@@ -123,7 +131,9 @@ class PoseEngine:
                         try:
                             hip = keypoints.get("left_hip") or keypoints.get("right_hip")
                             shoulder = keypoints.get("left_shoulder") or keypoints.get("right_shoulder")
-                            if hip and shoulder and min(hip[3], shoulder[3]) >= 0.3:
+                            in_profile = (pose_frame.shoulder_lateral_span
+                                          <= self._spine_max_shoulder_lateral_span)
+                            if hip and shoulder and min(hip[3], shoulder[3]) >= 0.3 and in_profile:
                                 h, w = frame.shape[:2]
                                 hip_px = (hip[0] * w, hip[1] * h)
                                 shoulder_px = (shoulder[0] * w, shoulder[1] * h)

@@ -39,6 +39,7 @@ class _RaisingSegBackend:
         keypoints = {
             "nose": (0.4, 0.1, 0.0, 0.9),
             "left_shoulder": (0.5, 0.2, 0.0, 0.9),
+            "right_shoulder": (0.51, 0.2, 0.0, 0.9),  # close to left -> profile stance
             "left_hip": (0.5, 0.6, 0.0, 0.9),
         }
         return keypoints, frame
@@ -80,6 +81,7 @@ class _SegmentingBackend:
         keypoints = {
             "nose": (0.4, 0.1, 0.0, 0.9),
             "left_shoulder": (0.5, 0.2, 0.0, 0.9),
+            "right_shoulder": (0.51, 0.2, 0.0, 0.9),  # close to left -> profile stance
             "left_hip": (0.5, 0.6, 0.0, 0.9),
         }
         return keypoints, frame
@@ -205,6 +207,7 @@ class _FlakySegBackend:
         keypoints = {
             "nose": (0.4, 0.1, 0.0, 0.9),
             "left_shoulder": (0.5, 0.2, 0.0, 0.9),
+            "right_shoulder": (0.51, 0.2, 0.0, 0.9),  # close to left -> profile stance
             "left_hip": (0.5, 0.6, 0.0, 0.9),
         }
         return keypoints, frame
@@ -286,3 +289,67 @@ def test_run_draws_at_most_configured_point_count(mocker):
     assert len(received) == 1
     assert engine._last_spine_points is not None
     assert len(engine._last_spine_points) == 3
+
+
+class _FacingCameraSegmentingBackend:
+    """Same as _SegmentingBackend (a valid, successful segmentation sample
+    every tick), but keypoints describe a person facing the camera (wide
+    shoulder lateral span), not standing in profile."""
+
+    def process(self, frame, highlight_joints=frozenset()):
+        keypoints = {
+            "nose": (0.5, 0.1, 0.0, 0.9),
+            "left_shoulder": (0.3, 0.2, 0.0, 0.9),
+            "right_shoulder": (0.7, 0.2, 0.0, 0.9),  # far from left -> facing camera
+            "left_hip": (0.3, 0.6, 0.0, 0.9),
+        }
+        return keypoints, frame
+
+    def get_segmentation_mask(self, roi_image):
+        h, w = roi_image.shape[:2]
+        mask = np.zeros((h, w), dtype=np.uint8)
+        center_x = w // 2
+        mask[:, max(0, center_x - 20):center_x + 20] = 255
+        return mask
+
+    def close(self):
+        pass
+
+
+def test_run_skips_spine_sampling_when_not_in_profile(mocker):
+    """Spine sampling must be skipped entirely when the person is facing
+    the camera rather than standing in profile (wide shoulder_lateral_span)
+    -- the whole geometric premise (hip-shoulder line as a sagittal-plane
+    proxy) doesn't hold otherwise, and drawing a contour on a front-facing
+    person would be meaningless."""
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    mock_cap = MagicMock()
+    mock_cap.isOpened.return_value = True
+    mock_cap.read.side_effect = [(True, frame), (False, None)]
+    mocker.patch("core.pose_engine.cv2.VideoCapture", return_value=mock_cap)
+
+    engine = PoseEngine(backend=_FacingCameraSegmentingBackend())
+    received = []
+    engine.subscribe(lambda pose_frame, annotated: received.append((pose_frame, annotated)))
+
+    engine._running = True
+    engine._run(source=0)
+
+    assert len(received) == 1
+    pose_frame, annotated = received[0]
+    assert pose_frame.spine_curvature_ratio is None
+    assert annotated.max() == 0
+    assert engine._last_spine_points is None
+
+
+def test_spine_max_shoulder_lateral_span_defaults_to_constant(monkeypatch):
+    from core.pose_engine import _SPINE_MAX_SHOULDER_LATERAL_SPAN
+    monkeypatch.delenv("SPINE_MAX_SHOULDER_LATERAL_SPAN", raising=False)
+    engine = PoseEngine(backend=_RaisingSegBackend())
+    assert engine._spine_max_shoulder_lateral_span == _SPINE_MAX_SHOULDER_LATERAL_SPAN
+
+
+def test_spine_max_shoulder_lateral_span_reads_from_env(monkeypatch):
+    monkeypatch.setenv("SPINE_MAX_SHOULDER_LATERAL_SPAN", "0.25")
+    engine = PoseEngine(backend=_RaisingSegBackend())
+    assert engine._spine_max_shoulder_lateral_span == pytest.approx(0.25)
