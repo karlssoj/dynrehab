@@ -277,20 +277,30 @@ def test_yolo_get_segmentation_mask_prefers_person_over_other_class(monkeypatch)
     assert (mask == 255).sum() == pytest.approx(20 * 20, abs=4)
 
 
-def test_draw_back_contour_draws_a_line_through_given_points():
-    from core.pose_backends import draw_back_contour
+def test_draw_back_contour_points_draws_a_dot_at_each_point():
+    from core.pose_backends import draw_back_contour_points
     frame = np.zeros((100, 100, 3), dtype=np.uint8)
     points = [(20.0, 20.0), (50.0, 50.0), (80.0, 20.0)]
-    draw_back_contour(frame, points)
-    # A visible (non-background) pixel should exist near the middle point.
-    region = frame[46:54, 46:54]
-    assert region.max() > 0
+    draw_back_contour_points(frame, points)
+    for x, y in points:
+        region = frame[int(y) - 3:int(y) + 3, int(x) - 3:int(x) + 3]
+        assert region.max() > 0
+    # No line drawn between points -- the midpoint between the first two
+    # points should stay background.
+    mid_x, mid_y = 35, 35
+    assert frame[mid_y, mid_x].max() == 0
 
 
-def test_draw_back_contour_no_op_for_fewer_than_two_points():
-    from core.pose_backends import draw_back_contour
+def test_draw_back_contour_points_draws_single_dot_for_one_point():
+    from core.pose_backends import draw_back_contour_points
     frame = np.zeros((100, 100, 3), dtype=np.uint8)
-    draw_back_contour(frame, [(20.0, 20.0)])
+    draw_back_contour_points(frame, [(50.0, 50.0)])
+    assert frame[47:54, 47:54].max() > 0
+
+
+def test_draw_back_contour_points_no_op_for_empty_list():
+    from core.pose_backends import draw_back_contour_points
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+    draw_back_contour_points(frame, [])
     assert frame.max() == 0
-    draw_back_contour(frame, [])
     assert frame.max() == 0

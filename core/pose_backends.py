@@ -35,15 +35,14 @@ def _draw_skeleton(frame: np.ndarray, keypoints: dict,
     return frame
 
 
-def draw_back_contour(frame: np.ndarray, points: list[tuple[float, float]],
-                       color: tuple = (0, 255, 255)) -> np.ndarray:
-    """Draw a connected polyline through `points` (already in this frame's
-    pixel coordinates, e.g. from spine_contour.back_contour_points_in_frame)
-    onto `frame` in place. No-op if fewer than 2 points."""
-    if len(points) < 2:
-        return frame
-    pts = np.array(points, dtype=np.int32).reshape(-1, 1, 2)
-    cv2.polylines(frame, [pts], isClosed=False, color=color, thickness=2)
+def draw_back_contour_points(frame: np.ndarray, points: list[tuple[float, float]],
+                              color: tuple = (0, 255, 255), radius: int = 4) -> np.ndarray:
+    """Draw a filled dot at each point (already in this frame's pixel
+    coordinates, e.g. from spine_contour.back_contour_points_in_frame /
+    downsample_points) onto `frame` in place, with no connecting line
+    between them. No-op if `points` is empty."""
+    for x, y in points:
+        cv2.circle(frame, (int(round(x)), int(round(y))), radius, color, -1)
     return frame
 
 

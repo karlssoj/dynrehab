@@ -4,6 +4,7 @@ import cv2
 
 from core.spine_contour import (facing_left, crop_and_rotate_roi, extract_back_contour,
                                   signed_curvature_ratio, back_contour_points_in_frame,
+                                  downsample_points,
                                   _MIN_CHORD_PX, _ROI_MARGIN_FRAC, _ROI_END_PAD_FRAC)
 
 
@@ -347,3 +348,36 @@ def test_back_contour_points_in_frame_empty_profile_gives_empty_points():
     _, hip_point, shoulder_point, chord_len, M = result
 
     assert back_contour_points_in_frame(M, hip_point, shoulder_point, [], on_right_side=True) == []
+
+
+def test_downsample_points_picks_evenly_spaced_indices():
+    points = [(float(i), float(i)) for i in range(21)]  # 21 points, indices 0..20
+    result = downsample_points(points, 10)
+    assert len(result) == 10
+    assert result[0] == points[0]
+    assert result[-1] == points[-1]
+    # Evenly spaced: consecutive gaps should all be close to 20/9 ~= 2.22
+    xs = [p[0] for p in result]
+    gaps = [xs[i + 1] - xs[i] for i in range(len(xs) - 1)]
+    assert all(1.5 <= g <= 3.0 for g in gaps)
+
+
+def test_downsample_points_returns_unchanged_when_fewer_than_n():
+    points = [(0.0, 0.0), (1.0, 1.0), (2.0, 2.0)]
+    assert downsample_points(points, 10) == points
+
+
+def test_downsample_points_empty_list_gives_empty_list():
+    assert downsample_points([], 10) == []
+
+
+def test_downsample_points_n_equals_one_gives_single_point():
+    points = [(float(i), float(i)) for i in range(21)]
+    result = downsample_points(points, 1)
+    assert len(result) == 1
+
+
+def test_downsample_points_n_zero_or_negative_gives_empty_list():
+    points = [(0.0, 0.0), (1.0, 1.0)]
+    assert downsample_points(points, 0) == []
+    assert downsample_points(points, -5) == []

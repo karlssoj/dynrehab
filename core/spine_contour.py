@@ -17,14 +17,14 @@ def facing_left(keypoints: dict) -> bool | None:
     visibility to tell."""
     nose = keypoints.get("nose")
     shoulder = keypoints.get("left_shoulder") or keypoints.get("right_shoulder")
-    if not nose or not shoulder or min(nose[3], shoulder[3]) < 0.3:
+    if not nose or not shoulder or min(nose[3], shoulder[3]) < 0.2:
         return None
     return nose[0] < shoulder[0]
 
 
 _ROI_MARGIN_FRAC = 0.3    # crop half-width, as a fraction of hip-shoulder chord length
 _ROI_END_PAD_FRAC = 0.15  # extra length past hip and past shoulder, as a fraction of chord length
-_MIN_CHORD_PX = 40        # skip if hip-shoulder pixel distance is smaller than this
+_MIN_CHORD_PX = 30        # skip if hip-shoulder pixel distance is smaller than this
 
 
 def crop_and_rotate_roi(frame: np.ndarray, hip_px: tuple[float, float],
@@ -147,3 +147,18 @@ def back_contour_points_in_frame(M: np.ndarray, hip_point: tuple[float, float],
     M_inv = cv2.invertAffineTransform(M)
     original_points = cv2.transform(roi_points, M_inv).reshape(-1, 2)
     return [(float(x), float(y)) for x, y in original_points]
+
+
+def downsample_points(points: list[tuple[float, float]], n: int) -> list[tuple[float, float]]:
+    """Pick n evenly-spaced points from `points`, always including both
+    endpoints. Returns `points` unchanged if it already has n or fewer
+    points. Returns an empty list if `points` is empty or n <= 0."""
+    if not points or n <= 0:
+        return []
+    length = len(points)
+    if length <= n:
+        return list(points)
+    if n == 1:
+        return [points[length // 2]]
+    indices = [round(i * (length - 1) / (n - 1)) for i in range(n)]
+    return [points[i] for i in indices]

@@ -6,10 +6,10 @@ import cv2
 import numpy as np
 from core.data_contract import PoseFrame
 from core.angle_calculator import calculate_angles
-from core.pose_backends import POSE_CONNECTIONS, PoseBackend, MediaPipeBackend, draw_back_contour
+from core.pose_backends import POSE_CONNECTIONS, PoseBackend, MediaPipeBackend, draw_back_contour_points
 from core.spine_contour import (crop_and_rotate_roi, extract_back_contour,
                                  signed_curvature_ratio, facing_left,
-                                 back_contour_points_in_frame)
+                                 back_contour_points_in_frame, downsample_points)
 
 # Kept for backwards compatibility — callers that imported LANDMARK_NAMES from here still work.
 LANDMARK_NAMES = {
@@ -28,6 +28,9 @@ _SPINE_SAMPLE_INTERVAL_SECS = 0.25  # 4 Hz — see spec's measured performance b
 # Override via the SPINE_SAMPLE_INTERVAL_SECS env var (e.g. in .env) — a
 # smaller value samples more often (updates the drawn contour faster) at
 # the cost of more CPU load per second; a larger value reduces load.
+
+_SPINE_CONTOUR_POINT_COUNT = 10  # how many dots to draw along the back contour
+# Override via the SPINE_CONTOUR_POINT_COUNT env var (e.g. in .env).
 
 
 def _should_sample_spine(last_sample_time: float, now: float,
@@ -48,6 +51,8 @@ class PoseEngine:
         self._last_spine_points: list[tuple[float, float]] | None = None
         self._spine_sample_interval = float(
             os.getenv("SPINE_SAMPLE_INTERVAL_SECS", _SPINE_SAMPLE_INTERVAL_SECS))
+        self._spine_contour_point_count = int(
+            os.getenv("SPINE_CONTOUR_POINT_COUNT", _SPINE_CONTOUR_POINT_COUNT))
         self._spine_error_logged = False
         print(f"[pose_engine] spine sample interval: {self._spine_sample_interval}s "
               f"({'from SPINE_SAMPLE_INTERVAL_SECS env var' if 'SPINE_SAMPLE_INTERVAL_SECS' in os.environ else 'default'})")
@@ -133,9 +138,11 @@ class PoseEngine:
                                             if face_left is not None:
                                                 left_profile, right_profile = profiles
                                                 back_profile = right_profile if face_left else left_profile
-                                                spine_points = back_contour_points_in_frame(
+                                                full_points = back_contour_points_in_frame(
                                                     M, hip_point, shoulder_point, back_profile,
                                                     on_right_side=face_left)
+                                                spine_points = downsample_points(
+                                                    full_points, self._spine_contour_point_count)
                                                 pose_frame.spine_curvature_ratio = signed_curvature_ratio(
                                                     left_profile, right_profile, chord_len, face_left)
                         except Exception as e:
@@ -157,7 +164,7 @@ class PoseEngine:
                         self._last_spine_points = spine_points
 
                     if self._last_spine_points:
-                        draw_back_contour(annotated, self._last_spine_points)
+                        draw_back_contour_points(annotated, self._last_spine_points)
 
                 with self._lock:
                     subs = list(self._subscribers)

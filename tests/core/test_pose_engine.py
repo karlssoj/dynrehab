@@ -251,3 +251,38 @@ def test_run_clears_cached_spine_points_when_a_later_sample_fails(mocker):
     assert received[1][0].spine_curvature_ratio is None
     assert received[1][1].max() == 0  # second frame: line cleared, nothing drawn
     assert engine._last_spine_points is None
+
+
+def test_spine_contour_point_count_defaults_to_constant(monkeypatch):
+    from core.pose_engine import _SPINE_CONTOUR_POINT_COUNT
+    monkeypatch.delenv("SPINE_CONTOUR_POINT_COUNT", raising=False)
+    engine = PoseEngine(backend=_RaisingSegBackend())
+    assert engine._spine_contour_point_count == _SPINE_CONTOUR_POINT_COUNT
+
+
+def test_spine_contour_point_count_reads_from_env(monkeypatch):
+    monkeypatch.setenv("SPINE_CONTOUR_POINT_COUNT", "5")
+    engine = PoseEngine(backend=_RaisingSegBackend())
+    assert engine._spine_contour_point_count == 5
+
+
+def test_run_draws_at_most_configured_point_count(mocker):
+    """The number of drawn dots must respect _spine_contour_point_count,
+    not the raw (much longer) per-row contour profile."""
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    mock_cap = MagicMock()
+    mock_cap.isOpened.return_value = True
+    mock_cap.read.side_effect = [(True, frame), (False, None)]
+    mocker.patch("core.pose_engine.cv2.VideoCapture", return_value=mock_cap)
+
+    engine = PoseEngine(backend=_SegmentingBackend())
+    engine._spine_contour_point_count = 3
+    received = []
+    engine.subscribe(lambda pose_frame, annotated: received.append(pose_frame))
+
+    engine._running = True
+    engine._run(source=0)
+
+    assert len(received) == 1
+    assert engine._last_spine_points is not None
+    assert len(engine._last_spine_points) == 3
