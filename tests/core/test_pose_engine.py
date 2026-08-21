@@ -342,14 +342,66 @@ def test_run_skips_spine_sampling_when_not_in_profile(mocker):
     assert engine._last_spine_points is None
 
 
-def test_spine_max_shoulder_lateral_span_defaults_to_constant(monkeypatch):
-    from core.pose_engine import _SPINE_MAX_SHOULDER_LATERAL_SPAN
-    monkeypatch.delenv("SPINE_MAX_SHOULDER_LATERAL_SPAN", raising=False)
+def test_spine_max_shoulder_lateral_ratio_defaults_to_constant(monkeypatch):
+    from core.pose_engine import _SPINE_MAX_SHOULDER_LATERAL_RATIO
+    monkeypatch.delenv("SPINE_MAX_SHOULDER_LATERAL_RATIO", raising=False)
     engine = PoseEngine(backend=_RaisingSegBackend())
-    assert engine._spine_max_shoulder_lateral_span == _SPINE_MAX_SHOULDER_LATERAL_SPAN
+    assert engine._spine_max_shoulder_lateral_ratio == _SPINE_MAX_SHOULDER_LATERAL_RATIO
 
 
-def test_spine_max_shoulder_lateral_span_reads_from_env(monkeypatch):
-    monkeypatch.setenv("SPINE_MAX_SHOULDER_LATERAL_SPAN", "0.25")
+def test_spine_max_shoulder_lateral_ratio_reads_from_env(monkeypatch):
+    monkeypatch.setenv("SPINE_MAX_SHOULDER_LATERAL_RATIO", "0.6")
     engine = PoseEngine(backend=_RaisingSegBackend())
-    assert engine._spine_max_shoulder_lateral_span == pytest.approx(0.25)
+    assert engine._spine_max_shoulder_lateral_ratio == pytest.approx(0.6)
+
+
+class _DistantFacingCameraSegmentingBackend:
+    """Same as _FacingCameraSegmentingBackend, but the person is small in
+    frame (far from the camera) -- the ABSOLUTE shoulder_lateral_span is
+    small even though they're still facing the camera, because everything
+    shrinks together with distance. A scale-invariant check (shoulder span
+    relative to torso length) must still reject this; a fixed absolute
+    threshold like the old 0.15 would incorrectly accept it."""
+
+    def process(self, frame, highlight_joints=frozenset()):
+        keypoints = {
+            "nose": (0.5, 0.28, 0.0, 0.9),
+            "left_shoulder": (0.45, 0.3, 0.0, 0.9),
+            "right_shoulder": (0.55, 0.3, 0.0, 0.9),  # span=0.10, below the old absolute 0.15
+            "left_hip": (0.45, 0.42, 0.0, 0.9),        # torso length=0.12 -> ratio ~0.83, clearly facing camera
+        }
+        return keypoints, frame
+
+    def get_segmentation_mask(self, roi_image):
+        h, w = roi_image.shape[:2]
+        mask = np.zeros((h, w), dtype=np.uint8)
+        center_x = w // 2
+        mask[:, max(0, center_x - 20):center_x + 20] = 255
+        return mask
+
+    def close(self):
+        pass
+
+
+def test_run_skips_spine_sampling_for_distant_person_facing_camera(mocker):
+    """A small-in-frame person facing the camera must still be rejected --
+    proves the orientation check is scale-invariant (relative to torso
+    length), not just comparing an absolute shoulder_lateral_span value
+    that shrinks with distance regardless of facing direction."""
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    mock_cap = MagicMock()
+    mock_cap.isOpened.return_value = True
+    mock_cap.read.side_effect = [(True, frame), (False, None)]
+    mocker.patch("core.pose_engine.cv2.VideoCapture", return_value=mock_cap)
+
+    engine = PoseEngine(backend=_DistantFacingCameraSegmentingBackend())
+    received = []
+    engine.subscribe(lambda pose_frame, annotated: received.append((pose_frame, annotated)))
+
+    engine._running = True
+    engine._run(source=0)
+
+    assert len(received) == 1
+    pose_frame, annotated = received[0]
+    assert pose_frame.spine_curvature_ratio is None
+    assert annotated.max() == 0

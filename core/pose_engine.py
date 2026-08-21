@@ -1,3 +1,4 @@
+import math
 import os
 import threading
 import time
@@ -32,11 +33,16 @@ _SPINE_SAMPLE_INTERVAL_SECS = 0.25  # 4 Hz — see spec's measured performance b
 _SPINE_CONTOUR_POINT_COUNT = 10  # how many dots to draw along the back contour
 # Override via the SPINE_CONTOUR_POINT_COUNT env var (e.g. in .env).
 
-_SPINE_MAX_SHOULDER_LATERAL_SPAN = 0.15  # same threshold already used elsewhere
-# (see llm_service.py's side-view detect_rep guard) to mean "not facing the
-# camera" -- below this, left/right shoulder are close enough in x that the
-# person is standing roughly in profile, which the hip-shoulder-line geometry
-# this feature relies on assumes. Override via SPINE_MAX_SHOULDER_LATERAL_SPAN.
+_SPINE_MAX_SHOULDER_LATERAL_RATIO = 0.4  # informed starting point, not validated —
+# shoulder_lateral_span alone is NOT scale-invariant: it shrinks with distance
+# from the camera regardless of facing direction, so a person far away (or
+# partly out of frame) could pass an absolute threshold while still facing
+# the camera. Normalizing by hip-shoulder distance (torso length in the same
+# frame) makes the check invariant to how large the person is in the image —
+# true profile gives a ratio near 0 regardless of distance; facing the
+# camera gives a ratio close to (shoulder width / torso length), roughly
+# 0.8-1.0 for typical body proportions. Override via
+# SPINE_MAX_SHOULDER_LATERAL_RATIO.
 
 
 def _should_sample_spine(last_sample_time: float, now: float,
@@ -59,8 +65,8 @@ class PoseEngine:
             os.getenv("SPINE_SAMPLE_INTERVAL_SECS", _SPINE_SAMPLE_INTERVAL_SECS))
         self._spine_contour_point_count = int(
             os.getenv("SPINE_CONTOUR_POINT_COUNT", _SPINE_CONTOUR_POINT_COUNT))
-        self._spine_max_shoulder_lateral_span = float(
-            os.getenv("SPINE_MAX_SHOULDER_LATERAL_SPAN", _SPINE_MAX_SHOULDER_LATERAL_SPAN))
+        self._spine_max_shoulder_lateral_ratio = float(
+            os.getenv("SPINE_MAX_SHOULDER_LATERAL_RATIO", _SPINE_MAX_SHOULDER_LATERAL_RATIO))
         self._spine_error_logged = False
         print(f"[pose_engine] spine sample interval: {self._spine_sample_interval}s "
               f"({'from SPINE_SAMPLE_INTERVAL_SECS env var' if 'SPINE_SAMPLE_INTERVAL_SECS' in os.environ else 'default'})")
@@ -131,8 +137,12 @@ class PoseEngine:
                         try:
                             hip = keypoints.get("left_hip") or keypoints.get("right_hip")
                             shoulder = keypoints.get("left_shoulder") or keypoints.get("right_shoulder")
-                            in_profile = (pose_frame.shoulder_lateral_span
-                                          <= self._spine_max_shoulder_lateral_span)
+                            in_profile = False
+                            if hip and shoulder:
+                                torso_span = math.hypot(shoulder[0] - hip[0], shoulder[1] - hip[1])
+                                if torso_span > 1e-6:
+                                    lateral_ratio = pose_frame.shoulder_lateral_span / torso_span
+                                    in_profile = lateral_ratio <= self._spine_max_shoulder_lateral_ratio
                             if hip and shoulder and min(hip[3], shoulder[3]) >= 0.3 and in_profile:
                                 h, w = frame.shape[:2]
                                 hip_px = (hip[0] * w, hip[1] * h)
