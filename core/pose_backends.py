@@ -18,6 +18,12 @@ POSE_CONNECTIONS = [
 
 _CONF_THRESHOLD = 0.3
 
+_JOINT_COLOR = (255, 255, 255)
+_JOINT_HIGHLIGHT_COLOR = (0, 0, 255)
+_JOINT_RADIUS = 5
+_CONNECTION_COLOR = (0, 255, 0)
+_CONNECTION_THICKNESS = 2
+
 
 def _draw_skeleton(frame: np.ndarray, keypoints: dict,
                    highlight_joints: frozenset = frozenset()) -> np.ndarray:
@@ -27,22 +33,31 @@ def _draw_skeleton(frame: np.ndarray, keypoints: dict,
             a, b = keypoints[a_name], keypoints[b_name]
             if a[3] > 0.5 and b[3] > 0.5:
                 cv2.line(frame, (int(a[0] * w), int(a[1] * h)),
-                         (int(b[0] * w), int(b[1] * h)), (0, 255, 0), 2)
+                         (int(b[0] * w), int(b[1] * h)), _CONNECTION_COLOR,
+                         _CONNECTION_THICKNESS)
     for name, (x, y, z, vis) in keypoints.items():
         if vis > 0.5:
-            color = (0, 0, 255) if name in highlight_joints else (255, 255, 255)
-            cv2.circle(frame, (int(x * w), int(y * h)), 5, color, -1)
+            color = _JOINT_HIGHLIGHT_COLOR if name in highlight_joints else _JOINT_COLOR
+            cv2.circle(frame, (int(x * w), int(y * h)), _JOINT_RADIUS, color, -1)
     return frame
 
 
-def draw_back_contour_points(frame: np.ndarray, points: list[tuple[float, float]],
-                              color: tuple = (0, 255, 255), radius: int = 4) -> np.ndarray:
-    """Draw a filled dot at each point (already in this frame's pixel
-    coordinates, e.g. from spine_contour.back_contour_points_in_frame /
-    downsample_points) onto `frame` in place, with no connecting line
-    between them. No-op if `points` is empty."""
+def draw_back_contour(frame: np.ndarray, points: list[tuple[float, float]]) -> np.ndarray:
+    """Draw the back contour in the same visual style as the pose skeleton
+    (_draw_skeleton): a green line (same color/thickness as skeleton
+    connections) through consecutive points, with a white filled circle
+    (same color/radius as skeleton joints) at each point, drawn on top.
+    `points` is already in this frame's pixel coordinates (e.g. from
+    spine_contour.back_contour_points_in_frame / downsample_points).
+    No-op if `points` is empty."""
+    for i in range(len(points) - 1):
+        x1, y1 = points[i]
+        x2, y2 = points[i + 1]
+        cv2.line(frame, (int(round(x1)), int(round(y1))),
+                  (int(round(x2)), int(round(y2))), _CONNECTION_COLOR,
+                  _CONNECTION_THICKNESS)
     for x, y in points:
-        cv2.circle(frame, (int(round(x)), int(round(y))), radius, color, -1)
+        cv2.circle(frame, (int(round(x)), int(round(y))), _JOINT_RADIUS, _JOINT_COLOR, -1)
     return frame
 
 

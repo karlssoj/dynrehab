@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 from core.data_contract import PoseFrame
 from core.angle_calculator import calculate_angles
-from core.pose_backends import POSE_CONNECTIONS, PoseBackend, MediaPipeBackend, draw_back_contour_points
+from core.pose_backends import POSE_CONNECTIONS, PoseBackend, MediaPipeBackend, draw_back_contour
 from core.spine_contour import (crop_and_rotate_roi, extract_back_contour,
                                  signed_curvature_ratio, facing_left,
                                  back_contour_points_in_frame, downsample_points)
@@ -164,7 +164,7 @@ class PoseEngine:
                         self._last_spine_points = spine_points
 
                     if self._last_spine_points:
-                        draw_back_contour_points(annotated, self._last_spine_points)
+                        draw_back_contour(annotated, self._last_spine_points)
 
                 with self._lock:
                     subs = list(self._subscribers)
