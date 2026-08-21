@@ -48,6 +48,9 @@ class PoseEngine:
         self._last_spine_points: list[tuple[float, float]] | None = None
         self._spine_sample_interval = float(
             os.getenv("SPINE_SAMPLE_INTERVAL_SECS", _SPINE_SAMPLE_INTERVAL_SECS))
+        self._spine_error_logged = False
+        print(f"[pose_engine] spine sample interval: {self._spine_sample_interval}s "
+              f"({'from SPINE_SAMPLE_INTERVAL_SECS env var' if 'SPINE_SAMPLE_INTERVAL_SECS' in os.environ else 'default'})")
 
     def seek_to_start(self):
         with self._lock:
@@ -134,14 +137,18 @@ class PoseEngine:
                                                     on_right_side=face_left)
                                                 pose_frame.spine_curvature_ratio = signed_curvature_ratio(
                                                     left_profile, right_profile, chord_len, face_left)
-                        except Exception:
+                        except Exception as e:
                             # A failure anywhere in the spine-sampling pipeline (e.g. a
                             # missing/corrupt segmentation model file, an internal
                             # ultralytics/torch error) must degrade to "no sample this
                             # tick" rather than crashing the capture loop — the rest of
                             # _run() (frame capture, angle calculation, subscriber
-                            # callbacks) must keep working regardless.
-                            pass
+                            # callbacks) must keep working regardless. Logged once (not
+                            # every ~250ms tick) so a persistent failure is still visible.
+                            if not self._spine_error_logged:
+                                self._spine_error_logged = True
+                                print(f"[pose_engine] spine sampling failed (will keep "
+                                      f"retrying silently, this is logged once only): {e}")
 
                     if self._last_spine_points:
                         draw_back_contour(annotated, self._last_spine_points)

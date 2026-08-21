@@ -159,3 +159,35 @@ def test_spine_sample_interval_reads_from_env(monkeypatch):
     monkeypatch.setenv("SPINE_SAMPLE_INTERVAL_SECS", "0.05")
     engine = PoseEngine(backend=_RaisingSegBackend())
     assert engine._spine_sample_interval == pytest.approx(0.05)
+
+
+def test_construction_prints_configured_spine_sample_interval(capsys, monkeypatch):
+    monkeypatch.setenv("SPINE_SAMPLE_INTERVAL_SECS", "0.05")
+    PoseEngine(backend=_RaisingSegBackend())
+    out = capsys.readouterr().out
+    assert "0.05" in out
+
+
+def test_spine_sampling_exception_is_logged_once_not_every_tick(mocker, capsys):
+    """A raising get_segmentation_mask must still print the actual error --
+    silently, exception must not disappear entirely -- but only on the
+    first occurrence, not every ~250ms tick, to avoid log spam."""
+    frame1 = np.zeros((480, 640, 3), dtype=np.uint8)
+    frame2 = np.zeros((480, 640, 3), dtype=np.uint8)
+    mock_cap = MagicMock()
+    mock_cap.isOpened.return_value = True
+    mock_cap.read.side_effect = [(True, frame1), (True, frame2), (False, None)]
+    mocker.patch("core.pose_engine.cv2.VideoCapture", return_value=mock_cap)
+    # Force both frames to be sampling ticks (interval effectively zero).
+    times = iter([1_700_000_000.0] * 10)
+    mocker.patch("core.pose_engine.time.time", side_effect=lambda: next(times))
+
+    engine = PoseEngine(backend=_RaisingSegBackend())
+    engine._spine_sample_interval = 0.0
+    engine.subscribe(lambda pose_frame, annotated: None)
+
+    engine._running = True
+    engine._run(source=0)
+
+    out = capsys.readouterr().out
+    assert out.count("segmentation model file missing or corrupt") == 1
