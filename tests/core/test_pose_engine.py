@@ -191,3 +191,63 @@ def test_spine_sampling_exception_is_logged_once_not_every_tick(mocker, capsys):
 
     out = capsys.readouterr().out
     assert out.count("segmentation model file missing or corrupt") == 1
+
+
+class _FlakySegBackend:
+    """Fake backend: first get_segmentation_mask call succeeds (valid mask),
+    every later call returns None -- simulates losing the contour (e.g. the
+    person moves, occlusion) after having found it once."""
+
+    def __init__(self):
+        self._call_count = 0
+
+    def process(self, frame, highlight_joints=frozenset()):
+        keypoints = {
+            "nose": (0.4, 0.1, 0.0, 0.9),
+            "left_shoulder": (0.5, 0.2, 0.0, 0.9),
+            "left_hip": (0.5, 0.6, 0.0, 0.9),
+        }
+        return keypoints, frame
+
+    def get_segmentation_mask(self, roi_image):
+        self._call_count += 1
+        if self._call_count == 1:
+            h, w = roi_image.shape[:2]
+            mask = np.zeros((h, w), dtype=np.uint8)
+            center_x = w // 2
+            mask[:, max(0, center_x - 20):center_x + 20] = 255
+            return mask
+        return None
+
+    def close(self):
+        pass
+
+
+def test_run_clears_cached_spine_points_when_a_later_sample_fails(mocker):
+    """If a sampling tick fails to find the contour (e.g. the mask is lost),
+    the previously drawn line must be cleared, not left hanging from the
+    last successful sample."""
+    frame1 = np.zeros((480, 640, 3), dtype=np.uint8)
+    frame2 = np.zeros((480, 640, 3), dtype=np.uint8)
+    mock_cap = MagicMock()
+    mock_cap.isOpened.return_value = True
+    mock_cap.read.side_effect = [(True, frame1), (True, frame2), (False, None)]
+    mocker.patch("core.pose_engine.cv2.VideoCapture", return_value=mock_cap)
+    times = iter([1_700_000_000.0] * 10)
+    mocker.patch("core.pose_engine.time.time", side_effect=lambda: next(times))
+
+    engine = PoseEngine(backend=_FlakySegBackend())
+    engine._spine_sample_interval = 0.0  # force every tick to sample
+    received = []
+    engine.subscribe(lambda pose_frame, annotated: received.append((pose_frame, annotated)))
+
+    engine._running = True
+    engine._run(source=0)
+
+    assert len(received) == 2
+    assert received[0][0].spine_curvature_ratio is not None
+    assert received[0][1].max() > 0  # first frame: line drawn
+
+    assert received[1][0].spine_curvature_ratio is None
+    assert received[1][1].max() == 0  # second frame: line cleared, nothing drawn
+    assert engine._last_spine_points is None

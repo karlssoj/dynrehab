@@ -114,6 +114,7 @@ class PoseEngine:
                     if _should_sample_spine(self._last_spine_sample, frame_start,
                                              self._spine_sample_interval):
                         self._last_spine_sample = frame_start
+                        spine_points = None  # cleared unless this attempt succeeds below
                         try:
                             hip = keypoints.get("left_hip") or keypoints.get("right_hip")
                             shoulder = keypoints.get("left_shoulder") or keypoints.get("right_shoulder")
@@ -132,7 +133,7 @@ class PoseEngine:
                                             if face_left is not None:
                                                 left_profile, right_profile = profiles
                                                 back_profile = right_profile if face_left else left_profile
-                                                self._last_spine_points = back_contour_points_in_frame(
+                                                spine_points = back_contour_points_in_frame(
                                                     M, hip_point, shoulder_point, back_profile,
                                                     on_right_side=face_left)
                                                 pose_frame.spine_curvature_ratio = signed_curvature_ratio(
@@ -149,6 +150,11 @@ class PoseEngine:
                                 self._spine_error_logged = True
                                 print(f"[pose_engine] spine sampling failed (will keep "
                                       f"retrying silently, this is logged once only): {e}")
+                        # Replace the cached points on every sampling attempt, success or
+                        # not -- a failed attempt (lost person, bad mask, exception) must
+                        # clear a stale line rather than let it linger from the last
+                        # successful sample.
+                        self._last_spine_points = spine_points
 
                     if self._last_spine_points:
                         draw_back_contour(annotated, self._last_spine_points)
