@@ -43,6 +43,8 @@ class PoseFrame:
     ankle_lateral_span: float = 0.0
     body_rotation_z: float = 0.0
     spine_curvature_ratio: float | None = None
+    spine_thoracic_curvature: float | None = None
+    spine_lumbar_curvature: float | None = None
     keypoints: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:

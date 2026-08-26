@@ -75,6 +75,8 @@ class SessionService:
         self._rep_snapshots: list[dict] = []
         self._calibration_last_speak: float = 0.0
         self._calibration_ready_since: float = 0.0
+        self._pending_spine_baseline: Optional[dict] = None
+        self._spine_baseline: Optional[dict] = None
         self._feedback_type: str = "window"  # "window" | "rep"
         self._exercise_elapsed_at_pause: float = 0.0
         self._load_module(module_code)
@@ -195,6 +197,10 @@ class SessionService:
                     self._calibration_last_speak = now
 
         elif self._state == "countdown":
+            thoracic = pose_data.get("spine_thoracic_curvature")
+            lumbar = pose_data.get("spine_lumbar_curvature")
+            if thoracic is not None and lumbar is not None:
+                self._pending_spine_baseline = {"thoracic": thoracic, "lumbar": lumbar}
             remaining = COUNTDOWN_SECS - elapsed
             count_num = max(0, math.ceil(remaining))
             if count_num != self._countdown_last:
@@ -281,6 +287,8 @@ class SessionService:
         self._round_rep_count = 0
         self._round_frames = []
         self._feedback_emitted = False
+        self._spine_baseline = self._pending_spine_baseline
+        self._pending_spine_baseline = None
         if self._reset_round:
             try:
                 self._reset_round()
@@ -295,6 +303,7 @@ class SessionService:
             "rep_count": self._round_rep_count,
             "frames": list(self._round_frames),
             "duration_seconds": self._exercise_secs,
+            "spine_baseline": dict(self._spine_baseline) if self._spine_baseline else None,
         }
         self._all_rounds.append(round_data)
         try:
@@ -311,16 +320,19 @@ class SessionService:
         self._state = "feedback"
         self._state_wall_start = time.time()
         rep_frames = list(self._round_frames[-60:])
+        spine_baseline = dict(self._spine_baseline) if self._spine_baseline else None
         rep_data = {
             "rep_number": self.rep_count,
             "round_number": self._round_number,
             "frames": rep_frames,
+            "spine_baseline": spine_baseline,
         }
         self._rep_snapshots.append({
             "round_number": self.rep_count,
             "rep_count": 1,
             "frames": rep_frames,
             "duration_seconds": 0.0,
+            "spine_baseline": spine_baseline,
         })
         try:
             lines = self._generate_rep_feedback(rep_data) if self._generate_rep_feedback else None

@@ -1,3 +1,5 @@
+import math
+import os
 import threading
 import time
 from typing import Callable
@@ -5,7 +7,12 @@ import cv2
 import numpy as np
 from core.data_contract import PoseFrame
 from core.angle_calculator import calculate_angles
-from core.pose_backends import POSE_CONNECTIONS, PoseBackend, MediaPipeBackend
+from core.pose_backends import POSE_CONNECTIONS, PoseBackend, MediaPipeBackend, draw_back_contour
+from core.spine_contour import (crop_and_rotate_roi, extract_back_contour,
+                                 signed_curvature_ratio, signed_curvature_profile,
+                                 spine_zone_curvature, facing_left,
+                                 back_contour_points_in_frame, downsample_points)
+from core.one_euro_filter import OneEuroFilter
 
 # Kept for backwards compatibility — callers that imported LANDMARK_NAMES from here still work.
 LANDMARK_NAMES = {
@@ -20,6 +27,44 @@ LANDMARK_NAMES = {
     31: "left_foot_index", 32: "right_foot_index",
 }
 
+_SPINE_SAMPLE_INTERVAL_SECS = 0.25  # 4 Hz — see spec's measured performance baseline
+# Override via the SPINE_SAMPLE_INTERVAL_SECS env var (e.g. in .env) — a
+# smaller value samples more often (updates the drawn contour faster) at
+# the cost of more CPU load per second; a larger value reduces load.
+
+_SPINE_CONTOUR_POINT_COUNT = 10  # how many dots to draw along the back contour
+# Override via the SPINE_CONTOUR_POINT_COUNT env var (e.g. in .env).
+
+_SPINE_MAX_SHOULDER_LATERAL_RATIO = 0.4  # informed starting point, not validated —
+# shoulder_lateral_span alone is NOT scale-invariant: it shrinks with distance
+# from the camera regardless of facing direction, so a person far away (or
+# partly out of frame) could pass an absolute threshold while still facing
+# the camera. Normalizing by hip-shoulder distance (torso length in the same
+# frame) makes the check invariant to how large the person is in the image —
+# true profile gives a ratio near 0 regardless of distance; facing the
+# camera gives a ratio close to (shoulder width / torso length), roughly
+# 0.8-1.0 for typical body proportions. Override via
+# SPINE_MAX_SHOULDER_LATERAL_RATIO.
+
+_SPINE_ZONE_FRACTION = 1.0 / 3.0  # see spine_contour.py's _SPINE_ZONE_FRACTION —
+# override via the SPINE_ZONE_FRACTION env var.
+
+# One-euro-filter tuning for the per-point spine curvature profile. Deliberately
+# separate from YOLOBackend's keypoint-smoothing constants (min_cutoff=1.0,
+# beta=0.05, d_cutoff=1.0 there) — those were tuned for a ~30fps per-frame
+# pixel-position stream, whereas spine sampling runs at ~4Hz on a derived
+# scalar (curvature deviation), a much lower and more irregular cadence.
+# Informed starting point, not validated — see Risks in the spine-posture
+# baseline design plan.
+_SPINE_FILTER_MIN_CUTOFF = 1.0  # override via SPINE_FILTER_MIN_CUTOFF
+_SPINE_FILTER_BETA = 0.1        # override via SPINE_FILTER_BETA
+_SPINE_FILTER_D_CUTOFF = 1.0    # override via SPINE_FILTER_D_CUTOFF
+
+
+def _should_sample_spine(last_sample_time: float, now: float,
+                          interval: float = _SPINE_SAMPLE_INTERVAL_SECS) -> bool:
+    return now - last_sample_time >= interval
+
 
 class PoseEngine:
     def __init__(self, backend: PoseBackend = None):
@@ -30,6 +75,26 @@ class PoseEngine:
         self._highlight_joints: set[str] = set()
         self._lock = threading.Lock()
         self._seek_start = False
+        self._last_spine_sample = 0.0
+        self._last_spine_points: list[tuple[float, float]] | None = None
+        self._spine_sample_interval = float(
+            os.getenv("SPINE_SAMPLE_INTERVAL_SECS", _SPINE_SAMPLE_INTERVAL_SECS))
+        self._spine_contour_point_count = int(
+            os.getenv("SPINE_CONTOUR_POINT_COUNT", _SPINE_CONTOUR_POINT_COUNT))
+        self._spine_max_shoulder_lateral_ratio = float(
+            os.getenv("SPINE_MAX_SHOULDER_LATERAL_RATIO", _SPINE_MAX_SHOULDER_LATERAL_RATIO))
+        self._spine_zone_fraction = float(
+            os.getenv("SPINE_ZONE_FRACTION", _SPINE_ZONE_FRACTION))
+        spine_filter_min_cutoff = float(os.getenv("SPINE_FILTER_MIN_CUTOFF", _SPINE_FILTER_MIN_CUTOFF))
+        spine_filter_beta = float(os.getenv("SPINE_FILTER_BETA", _SPINE_FILTER_BETA))
+        spine_filter_d_cutoff = float(os.getenv("SPINE_FILTER_D_CUTOFF", _SPINE_FILTER_D_CUTOFF))
+        self._spine_point_filters = [
+            OneEuroFilter(spine_filter_min_cutoff, spine_filter_beta, spine_filter_d_cutoff)
+            for _ in range(self._spine_contour_point_count)
+        ]
+        self._spine_error_logged = False
+        print(f"[pose_engine] spine sample interval: {self._spine_sample_interval}s "
+              f"({'from SPINE_SAMPLE_INTERVAL_SECS env var' if 'SPINE_SAMPLE_INTERVAL_SECS' in os.environ else 'default'})")
 
     def seek_to_start(self):
         with self._lock:
@@ -89,6 +154,81 @@ class PoseEngine:
                     for k, v in angles.items():
                         setattr(pose_frame, k, v)
                     pose_frame.keypoints = keypoints
+
+                    if _should_sample_spine(self._last_spine_sample, frame_start,
+                                             self._spine_sample_interval):
+                        self._last_spine_sample = frame_start
+                        spine_points = None  # cleared unless this attempt succeeds below
+                        smoothed_profile = None  # cleared unless this attempt succeeds below
+                        try:
+                            hip = keypoints.get("left_hip") or keypoints.get("right_hip")
+                            shoulder = keypoints.get("left_shoulder") or keypoints.get("right_shoulder")
+                            in_profile = False
+                            if hip and shoulder:
+                                torso_span = math.hypot(shoulder[0] - hip[0], shoulder[1] - hip[1])
+                                if torso_span > 1e-6:
+                                    lateral_ratio = pose_frame.shoulder_lateral_span / torso_span
+                                    in_profile = lateral_ratio <= self._spine_max_shoulder_lateral_ratio
+                            if hip and shoulder and min(hip[3], shoulder[3]) >= 0.3 and in_profile:
+                                h, w = frame.shape[:2]
+                                hip_px = (hip[0] * w, hip[1] * h)
+                                shoulder_px = (shoulder[0] * w, shoulder[1] * h)
+                                roi_result = crop_and_rotate_roi(frame, hip_px, shoulder_px)
+                                if roi_result:
+                                    roi_image, hip_point, shoulder_point, chord_len, M = roi_result
+                                    mask = self._backend.get_segmentation_mask(roi_image)
+                                    if mask is not None:
+                                        profiles = extract_back_contour(mask, hip_point, shoulder_point)
+                                        if profiles:
+                                            face_left = facing_left(keypoints)
+                                            if face_left is not None:
+                                                left_profile, right_profile = profiles
+                                                back_profile = right_profile if face_left else left_profile
+                                                full_points = back_contour_points_in_frame(
+                                                    M, hip_point, shoulder_point, back_profile,
+                                                    on_right_side=face_left)
+                                                spine_points = downsample_points(
+                                                    full_points, self._spine_contour_point_count)
+                                                pose_frame.spine_curvature_ratio = signed_curvature_ratio(
+                                                    left_profile, right_profile, chord_len, face_left)
+                                                raw_curvature_profile = signed_curvature_profile(
+                                                    back_profile, chord_len, self._spine_contour_point_count)
+                                                if raw_curvature_profile is not None:
+                                                    smoothed_profile = [
+                                                        self._spine_point_filters[i].filter(v, frame_start)
+                                                        for i, v in enumerate(raw_curvature_profile)
+                                                    ]
+                                                    (pose_frame.spine_thoracic_curvature,
+                                                     pose_frame.spine_lumbar_curvature) = spine_zone_curvature(
+                                                        smoothed_profile, self._spine_zone_fraction)
+                        except Exception as e:
+                            # A failure anywhere in the spine-sampling pipeline (e.g. a
+                            # missing/corrupt segmentation model file, an internal
+                            # ultralytics/torch error) must degrade to "no sample this
+                            # tick" rather than crashing the capture loop — the rest of
+                            # _run() (frame capture, angle calculation, subscriber
+                            # callbacks) must keep working regardless. Logged once (not
+                            # every ~250ms tick) so a persistent failure is still visible.
+                            if not self._spine_error_logged:
+                                self._spine_error_logged = True
+                                print(f"[pose_engine] spine sampling failed (will keep "
+                                      f"retrying silently, this is logged once only): {e}")
+                        # Replace the cached points on every sampling attempt, success or
+                        # not -- a failed attempt (lost person, bad mask, exception) must
+                        # clear a stale line rather than let it linger from the last
+                        # successful sample.
+                        self._last_spine_points = spine_points
+                        if smoothed_profile is None:
+                            # No fresh profile this tick (lost person, bad mask, wrong
+                            # orientation, exception) -- reset every per-point filter so a
+                            # stale _t_prev doesn't blend a much-later fresh reading with
+                            # an ancient one, producing an unpredictable dx_hat. Mirrors
+                            # _KeypointState's reset-on-loss handling in pose_backends.py.
+                            for f in self._spine_point_filters:
+                                f.reset()
+
+                    if self._last_spine_points:
+                        draw_back_contour(annotated, self._last_spine_points)
 
                 with self._lock:
                     subs = list(self._subscribers)

@@ -383,6 +383,76 @@ class _DistantFacingCameraSegmentingBackend:
         pass
 
 
+def test_init_creates_one_filter_per_spine_contour_point(monkeypatch):
+    monkeypatch.setenv("SPINE_CONTOUR_POINT_COUNT", "7")
+    engine = PoseEngine(backend=_RaisingSegBackend())
+    assert len(engine._spine_point_filters) == 7
+
+
+def test_run_sets_zone_curvature_fields_on_successful_sample(mocker):
+    """A successful spine sample must populate both new zone fields, not
+    just the legacy spine_curvature_ratio."""
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    mock_cap = MagicMock()
+    mock_cap.isOpened.return_value = True
+    mock_cap.read.side_effect = [(True, frame), (False, None)]
+    mocker.patch("core.pose_engine.cv2.VideoCapture", return_value=mock_cap)
+
+    engine = PoseEngine(backend=_SegmentingBackend())
+    received = []
+    engine.subscribe(lambda pose_frame, annotated: received.append(pose_frame))
+
+    engine._running = True
+    engine._run(source=0)
+
+    assert len(received) == 1
+    assert received[0].spine_thoracic_curvature is not None
+    assert received[0].spine_lumbar_curvature is not None
+
+
+def test_run_leaves_zone_curvature_fields_none_when_sample_fails(mocker):
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    mock_cap = MagicMock()
+    mock_cap.isOpened.return_value = True
+    mock_cap.read.side_effect = [(True, frame), (False, None)]
+    mocker.patch("core.pose_engine.cv2.VideoCapture", return_value=mock_cap)
+
+    engine = PoseEngine(backend=_RaisingSegBackend())
+    received = []
+    engine.subscribe(lambda pose_frame, annotated: received.append(pose_frame))
+
+    engine._running = True
+    engine._run(source=0)
+
+    assert len(received) == 1
+    assert received[0].spine_thoracic_curvature is None
+    assert received[0].spine_lumbar_curvature is None
+
+
+def test_run_resets_point_filters_after_a_failed_sampling_tick(mocker):
+    """After a tick that fails to produce a fresh profile (person lost,
+    mask lost, exception), every per-point OneEuroFilter must be reset --
+    verified via OneEuroFilter's documented behavior that the first filter()
+    call after a reset returns the raw, un-lagged value regardless of any
+    prior state."""
+    frame1 = np.zeros((480, 640, 3), dtype=np.uint8)
+    frame2 = np.zeros((480, 640, 3), dtype=np.uint8)
+    mock_cap = MagicMock()
+    mock_cap.isOpened.return_value = True
+    mock_cap.read.side_effect = [(True, frame1), (True, frame2), (False, None)]
+    mocker.patch("core.pose_engine.cv2.VideoCapture", return_value=mock_cap)
+    times = iter([1_700_000_000.0] * 10)
+    mocker.patch("core.pose_engine.time.time", side_effect=lambda: next(times))
+
+    engine = PoseEngine(backend=_FlakySegBackend())
+    engine._spine_sample_interval = 0.0  # force every tick to sample
+
+    engine._running = True
+    engine._run(source=0)
+
+    assert all(f._t_prev is None for f in engine._spine_point_filters)
+
+
 def test_run_skips_spine_sampling_for_distant_person_facing_camera(mocker):
     """A small-in-frame person facing the camera must still be rejected --
     proves the orientation check is scale-invariant (relative to torso

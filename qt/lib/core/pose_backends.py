@@ -18,6 +18,12 @@ POSE_CONNECTIONS = [
 
 _CONF_THRESHOLD = 0.3
 
+_JOINT_COLOR = (255, 255, 255)
+_JOINT_HIGHLIGHT_COLOR = (0, 0, 255)
+_JOINT_RADIUS = 5
+_CONNECTION_COLOR = (0, 255, 0)
+_CONNECTION_THICKNESS = 2
+
 
 def _draw_skeleton(frame: np.ndarray, keypoints: dict,
                    highlight_joints: frozenset = frozenset()) -> np.ndarray:
@@ -27,11 +33,31 @@ def _draw_skeleton(frame: np.ndarray, keypoints: dict,
             a, b = keypoints[a_name], keypoints[b_name]
             if a[3] > 0.5 and b[3] > 0.5:
                 cv2.line(frame, (int(a[0] * w), int(a[1] * h)),
-                         (int(b[0] * w), int(b[1] * h)), (0, 255, 0), 2)
+                         (int(b[0] * w), int(b[1] * h)), _CONNECTION_COLOR,
+                         _CONNECTION_THICKNESS)
     for name, (x, y, z, vis) in keypoints.items():
         if vis > 0.5:
-            color = (0, 0, 255) if name in highlight_joints else (255, 255, 255)
-            cv2.circle(frame, (int(x * w), int(y * h)), 5, color, -1)
+            color = _JOINT_HIGHLIGHT_COLOR if name in highlight_joints else _JOINT_COLOR
+            cv2.circle(frame, (int(x * w), int(y * h)), _JOINT_RADIUS, color, -1)
+    return frame
+
+
+def draw_back_contour(frame: np.ndarray, points: list[tuple[float, float]]) -> np.ndarray:
+    """Draw the back contour in the same visual style as the pose skeleton
+    (_draw_skeleton): a green line (same color/thickness as skeleton
+    connections) through consecutive points, with a white filled circle
+    (same color/radius as skeleton joints) at each point, drawn on top.
+    `points` is already in this frame's pixel coordinates (e.g. from
+    spine_contour.back_contour_points_in_frame / downsample_points).
+    No-op if `points` is empty."""
+    for i in range(len(points) - 1):
+        x1, y1 = points[i]
+        x2, y2 = points[i + 1]
+        cv2.line(frame, (int(round(x1)), int(round(y1))),
+                  (int(round(x2)), int(round(y2))), _CONNECTION_COLOR,
+                  _CONNECTION_THICKNESS)
+    for x, y in points:
+        cv2.circle(frame, (int(round(x)), int(round(y))), _JOINT_RADIUS, _JOINT_COLOR, -1)
     return frame
 
 
@@ -49,6 +75,14 @@ class PoseBackend(ABC):
     @abstractmethod
     def close(self) -> None:
         """Release backend resources."""
+
+    def get_segmentation_mask(self, roi_image: np.ndarray) -> np.ndarray | None:
+        """roi_image: an already-cropped BGR image (e.g. the rotated torso
+        ROI from spine_contour.crop_and_rotate_roi). Returns a binary mask
+        (uint8, 0/255) the same size as roi_image, or None if this backend
+        doesn't support segmentation or no person/mask is found. Default:
+        unsupported."""
+        return None
 
 
 class MediaPipeBackend(PoseBackend):
@@ -139,7 +173,8 @@ class YOLOBackend(PoseBackend):
                  min_cutoff: float = _DEFAULT_MIN_CUTOFF,
                  beta: float = _DEFAULT_BETA,
                  d_cutoff: float = _DEFAULT_D_CUTOFF,
-                 hold_max_seconds: float = _DEFAULT_HOLD_MAX_SECONDS):
+                 hold_max_seconds: float = _DEFAULT_HOLD_MAX_SECONDS,
+                 seg_model_path: str = "yolo11n-seg.pt"):
         from ultralytics import YOLO
         self._model = YOLO(model_path)
         self._min_cutoff = min_cutoff
@@ -147,6 +182,8 @@ class YOLOBackend(PoseBackend):
         self._d_cutoff = d_cutoff
         self._hold_max_seconds = hold_max_seconds
         self._filter_state: dict[str, _KeypointState] = {}
+        self._seg_model_path = seg_model_path
+        self._seg_model = None
 
     def process(self, frame: np.ndarray,
                 highlight_joints: frozenset = frozenset()) -> tuple[dict, np.ndarray]:
@@ -194,6 +231,36 @@ class YOLOBackend(PoseBackend):
             return keypoints, _draw_skeleton(annotated, keypoints, highlight_joints)
 
         return {}, annotated
+
+    def get_segmentation_mask(self, roi_image: np.ndarray) -> np.ndarray | None:
+        if self._seg_model is False:
+            return None
+        if self._seg_model is None:
+            try:
+                from ultralytics import YOLO
+                self._seg_model = YOLO(self._seg_model_path)
+            except Exception as e:
+                print(f"[pose_backends] segmentation model load failed, disabling spine sampling: {e}")
+                self._seg_model = False
+                return None
+        results = self._seg_model(roi_image, verbose=False, imgsz=320)
+        for r in results:
+            if r.masks is None or r.masks.data.shape[0] == 0:
+                continue
+            classes = r.boxes.cls.cpu().numpy() if r.boxes is not None else None
+            masks_np = r.masks.data.cpu().numpy()
+            if classes is not None:
+                person_indices = [i for i, c in enumerate(classes) if int(c) == 0]
+            else:
+                person_indices = list(range(len(masks_np)))
+            if not person_indices:
+                return None
+            best_idx = max(person_indices, key=lambda i: masks_np[i].sum())
+            mask = masks_np[best_idx]
+            mask_u8 = (mask > 0.5).astype("uint8") * 255
+            return cv2.resize(mask_u8, (roi_image.shape[1], roi_image.shape[0]),
+                               interpolation=cv2.INTER_NEAREST)
+        return None
 
     def close(self) -> None:
         pass

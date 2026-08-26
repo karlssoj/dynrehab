@@ -9,8 +9,10 @@ from core.data_contract import PoseFrame
 from core.angle_calculator import calculate_angles
 from core.pose_backends import POSE_CONNECTIONS, PoseBackend, MediaPipeBackend, draw_back_contour
 from core.spine_contour import (crop_and_rotate_roi, extract_back_contour,
-                                 signed_curvature_ratio, facing_left,
+                                 signed_curvature_ratio, signed_curvature_profile,
+                                 spine_zone_curvature, facing_left,
                                  back_contour_points_in_frame, downsample_points)
+from core.one_euro_filter import OneEuroFilter
 
 # Kept for backwards compatibility — callers that imported LANDMARK_NAMES from here still work.
 LANDMARK_NAMES = {
@@ -44,6 +46,20 @@ _SPINE_MAX_SHOULDER_LATERAL_RATIO = 0.4  # informed starting point, not validate
 # 0.8-1.0 for typical body proportions. Override via
 # SPINE_MAX_SHOULDER_LATERAL_RATIO.
 
+_SPINE_ZONE_FRACTION = 1.0 / 3.0  # see spine_contour.py's _SPINE_ZONE_FRACTION —
+# override via the SPINE_ZONE_FRACTION env var.
+
+# One-euro-filter tuning for the per-point spine curvature profile. Deliberately
+# separate from YOLOBackend's keypoint-smoothing constants (min_cutoff=1.0,
+# beta=0.05, d_cutoff=1.0 there) — those were tuned for a ~30fps per-frame
+# pixel-position stream, whereas spine sampling runs at ~4Hz on a derived
+# scalar (curvature deviation), a much lower and more irregular cadence.
+# Informed starting point, not validated — see Risks in the spine-posture
+# baseline design plan.
+_SPINE_FILTER_MIN_CUTOFF = 1.0  # override via SPINE_FILTER_MIN_CUTOFF
+_SPINE_FILTER_BETA = 0.1        # override via SPINE_FILTER_BETA
+_SPINE_FILTER_D_CUTOFF = 1.0    # override via SPINE_FILTER_D_CUTOFF
+
 
 def _should_sample_spine(last_sample_time: float, now: float,
                           interval: float = _SPINE_SAMPLE_INTERVAL_SECS) -> bool:
@@ -67,6 +83,15 @@ class PoseEngine:
             os.getenv("SPINE_CONTOUR_POINT_COUNT", _SPINE_CONTOUR_POINT_COUNT))
         self._spine_max_shoulder_lateral_ratio = float(
             os.getenv("SPINE_MAX_SHOULDER_LATERAL_RATIO", _SPINE_MAX_SHOULDER_LATERAL_RATIO))
+        self._spine_zone_fraction = float(
+            os.getenv("SPINE_ZONE_FRACTION", _SPINE_ZONE_FRACTION))
+        spine_filter_min_cutoff = float(os.getenv("SPINE_FILTER_MIN_CUTOFF", _SPINE_FILTER_MIN_CUTOFF))
+        spine_filter_beta = float(os.getenv("SPINE_FILTER_BETA", _SPINE_FILTER_BETA))
+        spine_filter_d_cutoff = float(os.getenv("SPINE_FILTER_D_CUTOFF", _SPINE_FILTER_D_CUTOFF))
+        self._spine_point_filters = [
+            OneEuroFilter(spine_filter_min_cutoff, spine_filter_beta, spine_filter_d_cutoff)
+            for _ in range(self._spine_contour_point_count)
+        ]
         self._spine_error_logged = False
         print(f"[pose_engine] spine sample interval: {self._spine_sample_interval}s "
               f"({'from SPINE_SAMPLE_INTERVAL_SECS env var' if 'SPINE_SAMPLE_INTERVAL_SECS' in os.environ else 'default'})")
@@ -134,6 +159,7 @@ class PoseEngine:
                                              self._spine_sample_interval):
                         self._last_spine_sample = frame_start
                         spine_points = None  # cleared unless this attempt succeeds below
+                        smoothed_profile = None  # cleared unless this attempt succeeds below
                         try:
                             hip = keypoints.get("left_hip") or keypoints.get("right_hip")
                             shoulder = keypoints.get("left_shoulder") or keypoints.get("right_shoulder")
@@ -165,6 +191,16 @@ class PoseEngine:
                                                     full_points, self._spine_contour_point_count)
                                                 pose_frame.spine_curvature_ratio = signed_curvature_ratio(
                                                     left_profile, right_profile, chord_len, face_left)
+                                                raw_curvature_profile = signed_curvature_profile(
+                                                    back_profile, chord_len, self._spine_contour_point_count)
+                                                if raw_curvature_profile is not None:
+                                                    smoothed_profile = [
+                                                        self._spine_point_filters[i].filter(v, frame_start)
+                                                        for i, v in enumerate(raw_curvature_profile)
+                                                    ]
+                                                    (pose_frame.spine_thoracic_curvature,
+                                                     pose_frame.spine_lumbar_curvature) = spine_zone_curvature(
+                                                        smoothed_profile, self._spine_zone_fraction)
                         except Exception as e:
                             # A failure anywhere in the spine-sampling pipeline (e.g. a
                             # missing/corrupt segmentation model file, an internal
@@ -182,6 +218,14 @@ class PoseEngine:
                         # clear a stale line rather than let it linger from the last
                         # successful sample.
                         self._last_spine_points = spine_points
+                        if smoothed_profile is None:
+                            # No fresh profile this tick (lost person, bad mask, wrong
+                            # orientation, exception) -- reset every per-point filter so a
+                            # stale _t_prev doesn't blend a much-later fresh reading with
+                            # an ancient one, producing an unpredictable dx_hat. Mirrors
+                            # _KeypointState's reset-on-loss handling in pose_backends.py.
+                            for f in self._spine_point_filters:
+                                f.reset()
 
                     if self._last_spine_points:
                         draw_back_contour(annotated, self._last_spine_points)

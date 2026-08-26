@@ -3,8 +3,9 @@ import numpy as np
 import cv2
 
 from core.spine_contour import (facing_left, crop_and_rotate_roi, extract_back_contour,
-                                  signed_curvature_ratio, back_contour_points_in_frame,
-                                  downsample_points,
+                                  signed_curvature_ratio, signed_curvature_profile,
+                                  spine_zone_curvature, back_contour_points_in_frame,
+                                  downsample_points, _evenly_spaced_indices, _bucket_indices,
                                   _MIN_CHORD_PX, _ROI_MARGIN_FRAC, _ROI_END_PAD_FRAC)
 
 
@@ -381,3 +382,170 @@ def test_downsample_points_n_zero_or_negative_gives_empty_list():
     points = [(0.0, 0.0), (1.0, 1.0)]
     assert downsample_points(points, 0) == []
     assert downsample_points(points, -5) == []
+
+
+# --- _evenly_spaced_indices -------------------------------------------------
+
+def test_evenly_spaced_indices_picks_evenly_spaced_including_endpoints():
+    indices = _evenly_spaced_indices(21, 10)
+    assert len(indices) == 10
+    assert indices[0] == 0
+    assert indices[-1] == 20
+
+
+def test_evenly_spaced_indices_returns_full_range_when_fewer_than_n():
+    assert _evenly_spaced_indices(3, 10) == [0, 1, 2]
+
+
+def test_evenly_spaced_indices_empty_when_length_zero():
+    assert _evenly_spaced_indices(0, 10) == []
+
+
+def test_evenly_spaced_indices_n_equals_one_gives_middle_index():
+    assert _evenly_spaced_indices(21, 1) == [10]
+
+
+def test_evenly_spaced_indices_n_zero_or_negative_gives_empty_list():
+    assert _evenly_spaced_indices(10, 0) == []
+    assert _evenly_spaced_indices(10, -5) == []
+
+
+# --- _bucket_indices ----------------------------------------------------------
+
+def test_bucket_indices_covers_every_index_exactly_once():
+    buckets = _bucket_indices(23, 5)
+    assert len(buckets) == 5
+    flat = [i for bucket in buckets for i in bucket]
+    assert flat == list(range(23))
+
+
+def test_bucket_indices_roughly_equal_sizes():
+    buckets = _bucket_indices(10, 3)
+    sizes = sorted(len(b) for b in buckets)
+    assert sizes == [3, 3, 4]
+
+
+def test_bucket_indices_n_greater_than_length_gives_single_index_buckets():
+    buckets = _bucket_indices(3, 10)
+    assert buckets == [[0], [1], [2]]
+
+
+def test_bucket_indices_empty_when_length_zero_or_n_nonpositive():
+    assert _bucket_indices(0, 5) == []
+    assert _bucket_indices(5, 0) == []
+    assert _bucket_indices(5, -1) == []
+
+
+# --- signed_curvature_profile ------------------------------------------------
+
+def test_signed_curvature_profile_straight_profile_all_near_zero():
+    profile = [20.0] * 10
+    result = signed_curvature_profile(profile, chord_len=100.0, n=10)
+    assert result is not None
+    assert all(v == pytest.approx(0.0, abs=0.01) for v in result)
+
+
+def test_signed_curvature_profile_downsamples_to_n_points_including_endpoints():
+    profile = [20.0 + i for i in range(21)]
+    result = signed_curvature_profile(profile, chord_len=100.0, n=10)
+    assert result is not None
+    assert len(result) == 10
+
+
+def test_signed_curvature_profile_none_for_empty_profile():
+    assert signed_curvature_profile([], chord_len=100.0, n=10) is None
+
+
+def test_signed_curvature_profile_none_for_nonpositive_chord_len():
+    profile = [20.0] * 10
+    assert signed_curvature_profile(profile, chord_len=0.0, n=10) is None
+
+
+def test_signed_curvature_profile_sign_matches_bulge_and_cave():
+    bulged = [20.0, 20.0, 20.0, 25.0, 30.0, 25.0, 20.0, 20.0, 20.0, 20.0]
+    result = signed_curvature_profile(bulged, chord_len=100.0, n=10)
+    assert result is not None
+    assert max(result) > 0
+
+    caved = [20.0, 20.0, 20.0, 15.0, 10.0, 15.0, 20.0, 20.0, 20.0, 20.0]
+    result = signed_curvature_profile(caved, chord_len=100.0, n=10)
+    assert result is not None
+    assert min(result) < 0
+
+
+def test_signed_curvature_profile_never_misses_a_sustained_deformation_at_any_offset():
+    """Regression test for a real aliasing bug: with a high-resolution raw
+    profile (e.g. ~200 rows for a typical torso), naively sampling n=10
+    evenly-spaced rows can fall entirely between a real, sustained
+    deformation (a deliberate hunch spanning many consecutive rows) and
+    miss it completely, regardless of how pronounced the deformation is.
+    Bucket-max must catch it no matter which rows it occupies."""
+    n_raw = 200
+    baseline_val = 20.0
+    bump = 15.0
+    # Slide a 14-row-wide sustained bump across interior start offsets (not
+    # touching row 0 or the last row -- those coincide with the profile's own
+    # endpoints, which by construction anchor the straight-line reference and
+    # so can never show a deviation from themselves; that's an inherent
+    # property of the endpoint-anchored method, not the aliasing bug under
+    # test here) and verify it is never fully missed.
+    for start in range(10, n_raw - 24, 7):
+        profile = [baseline_val] * n_raw
+        for i in range(start, start + 14):
+            profile[i] = baseline_val + bump
+        result = signed_curvature_profile(profile, chord_len=200.0, n=10)
+        assert result is not None
+        assert max(result, key=abs) > 0.0, f"deformation at rows {start}-{start+14} was missed"
+
+
+def test_signed_curvature_ratio_matches_signed_curvature_profile_peak():
+    fixtures = [
+        [20.0] * 10,
+        [20.0, 20.0, 20.0, 25.0, 30.0, 25.0, 20.0, 20.0, 20.0, 20.0],
+        [20.0, 20.0, 20.0, 15.0, 10.0, 15.0, 20.0, 20.0, 20.0, 20.0],
+    ]
+    for back_profile in fixtures:
+        expected = max(signed_curvature_profile(back_profile, 100.0, len(back_profile)), key=abs)
+        actual = signed_curvature_ratio(back_profile, back_profile, chord_len=100.0, facing_left=True)
+        assert actual == pytest.approx(expected)
+
+
+# --- spine_zone_curvature -----------------------------------------------------
+
+def test_spine_zone_curvature_thirds_split():
+    # Bulge (positive) concentrated in the first third (shoulder end),
+    # cave (negative) concentrated in the last third (hip end).
+    profile = [0.3, 0.3, 0.3, 0.0, 0.0, 0.0, -0.3, -0.3, -0.3]
+    thoracic, lumbar = spine_zone_curvature(profile)
+    assert thoracic == pytest.approx(0.3)
+    assert lumbar == pytest.approx(-0.3)
+
+
+def test_spine_zone_curvature_empty_profile_gives_none_none():
+    assert spine_zone_curvature([]) == (None, None)
+
+
+def test_spine_zone_curvature_short_profile_falls_back_to_whole_profile_peak():
+    profile = [0.2, 0.4]
+    thoracic, lumbar = spine_zone_curvature(profile)
+    assert thoracic == pytest.approx(0.4)
+    assert lumbar == pytest.approx(0.4)
+
+
+def test_spine_zone_curvature_uses_peak_not_mean_within_zone():
+    # A single spatially-concentrated deformation (0.6) surrounded by
+    # near-neutral neighbors in the same zone must NOT be diluted by
+    # averaging -- the zone value must reflect the worst point found,
+    # since each input point already represents its own slice's peak
+    # (see signed_curvature_profile's bucket-max reduction).
+    profile = [0.0, 0.6, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    thoracic, lumbar = spine_zone_curvature(profile)
+    assert thoracic == pytest.approx(0.6)
+    assert lumbar == pytest.approx(0.0)
+
+
+def test_spine_zone_curvature_custom_zone_fraction():
+    profile = [1.0, 1.0, 0.0, 0.0, 0.0, -1.0, -1.0]
+    thoracic, lumbar = spine_zone_curvature(profile, zone_fraction=2.0 / 7.0)
+    assert thoracic == pytest.approx(1.0)
+    assert lumbar == pytest.approx(-1.0)
