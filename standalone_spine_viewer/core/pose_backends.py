@@ -1,4 +1,6 @@
 from abc import ABC, abstractmethod
+import math
+import os
 import time
 import cv2
 import numpy as np
@@ -16,7 +18,16 @@ POSE_CONNECTIONS = [
     ("nose", "left_shoulder"), ("nose", "right_shoulder"),
 ]
 
-_CONF_THRESHOLD = 0.3
+# Minimum per-keypoint YOLO confidence (YOLOBackend only) for a keypoint to be
+# published fresh; below this, the keypoint is held at its last known
+# position for up to _DEFAULT_HOLD_MAX_SECONDS, then dropped entirely. A
+# keypoint that's dropped (e.g. hip or shoulder) makes the spine-sampling
+# gate in pose_engine.py fail for that tick, since it requires both to be
+# present -- if the model's confidence for those joints hovers near/below
+# this threshold under the camera/lighting/distance in use, the spine line
+# will intermittently vanish even though the person is genuinely in profile.
+# Override via the YOLO_KEYPOINT_CONF_THRESHOLD env var.
+_CONF_THRESHOLD = float(os.getenv("YOLO_KEYPOINT_CONF_THRESHOLD", "0.3"))
 
 _JOINT_COLOR = (255, 255, 255)
 _JOINT_HIGHLIGHT_COLOR = (0, 0, 255)
@@ -194,13 +205,74 @@ class PoseBackend(ABC):
     def close(self) -> None:
         """Release backend resources."""
 
-    def get_segmentation_mask(self, roi_image: np.ndarray) -> np.ndarray | None:
+    def get_segmentation_mask(self, roi_image: np.ndarray,
+                               roi_transform: np.ndarray | None = None) -> np.ndarray | None:
         """roi_image: an already-cropped BGR image (e.g. the rotated torso
-        ROI from spine_contour.crop_and_rotate_roi). Returns a binary mask
-        (uint8, 0/255) the same size as roi_image, or None if this backend
-        doesn't support segmentation or no person/mask is found. Default:
-        unsupported."""
+        ROI from spine_contour.crop_and_rotate_roi). roi_transform: the same
+        affine matrix (M) crop_and_rotate_roi used to produce roi_image from
+        the full frame -- backends that only have a FULL-FRAME segmentation
+        mask (e.g. MediaPipeBackend) warp that cached mask through this same
+        transform instead of re-segmenting the small crop in isolation
+        (which doesn't give a person-shaped model enough context to work
+        with). Backends that segment the crop directly (e.g. YOLOBackend)
+        can ignore it. Returns a binary mask (uint8, 0/255) the same size as
+        roi_image, or None if this backend doesn't support segmentation or
+        no person/mask is found. Default: unsupported."""
         return None
+
+
+# MediaPipe-only occlusion heuristic (see _hide_occluded_pairs): bilateral
+# joint pairs to check. YOLOBackend doesn't get this treatment -- its z is
+# always a hardcoded 0.0 (see YOLOBackend.process), so there's no depth
+# signal to decide which side is actually farther from the camera.
+_OCCLUSION_PAIRS = (
+    ("left_shoulder", "right_shoulder"), ("left_elbow", "right_elbow"),
+    ("left_wrist", "right_wrist"), ("left_hip", "right_hip"),
+    ("left_knee", "right_knee"), ("left_ankle", "right_ankle"),
+)
+
+# How close together (as a fraction of torso span) a pair's x-coordinates
+# need to be before treating them as overlapping in a side-profile stance
+# (where one member is actually hidden behind the body) rather than a
+# genuinely wide stance (e.g. a lunge, where both legs are visibly apart).
+# Informed starting point, not validated.
+_OCCLUSION_LATERAL_RATIO = 0.15
+
+
+def _hide_occluded_pairs(keypoints: dict) -> dict:
+    """Returns a COPY of `keypoints` where, for each pair in
+    _OCCLUSION_PAIRS whose x-coordinates are within _OCCLUSION_LATERAL_RATIO
+    of the torso span, the farther member (larger z -- MediaPipe's depth
+    convention: smaller z = closer to camera) has its visibility zeroed out,
+    so the >0.5 visibility check in _draw_skeleton excludes it from the
+    drawn skeleton. Only ever used for the COPY passed to _draw_skeleton --
+    the original dict returned to the caller for angle calculations
+    (PoseFrame etc.) is never touched, so occluded-but-plausible joint
+    guesses are still available for anything that needs them. Returns
+    `keypoints` unchanged if the shoulder/hip midpoints needed to measure
+    torso span aren't both present."""
+    ls, rs = keypoints.get("left_shoulder"), keypoints.get("right_shoulder")
+    lh, rh = keypoints.get("left_hip"), keypoints.get("right_hip")
+    if not (ls and rs and lh and rh):
+        return keypoints
+    shoulder_mid = ((ls[0] + rs[0]) / 2.0, (ls[1] + rs[1]) / 2.0)
+    hip_mid = ((lh[0] + rh[0]) / 2.0, (lh[1] + rh[1]) / 2.0)
+    torso_span = math.hypot(shoulder_mid[0] - hip_mid[0], shoulder_mid[1] - hip_mid[1])
+    if torso_span < 1e-6:
+        return keypoints
+
+    result = dict(keypoints)
+    for left_name, right_name in _OCCLUSION_PAIRS:
+        left, right = keypoints.get(left_name), keypoints.get(right_name)
+        if left is None or right is None:
+            continue
+        lateral_gap = abs(left[0] - right[0])
+        if lateral_gap / torso_span > _OCCLUSION_LATERAL_RATIO:
+            continue  # separated enough in x -- both plausibly visible (e.g. a lunge)
+        farther_name = left_name if left[2] > right[2] else right_name
+        x, y, z, _ = result[farther_name]
+        result[farther_name] = (x, y, z, 0.0)
+    return result
 
 
 class MediaPipeBackend(PoseBackend):
@@ -216,15 +288,29 @@ class MediaPipeBackend(PoseBackend):
         31: "left_foot_index", 32: "right_foot_index",
     }
 
+    # Segmentation confidence: mediapipe's mask is a float32 [0,1] "is this
+    # pixel person" probability, thresholded at this value into a binary
+    # mask (matching YOLOBackend's own 0/255 convention). Informed starting
+    # point, not validated.
+    _SEGMENTATION_THRESHOLD = 0.5
+
     def __init__(self, model_complexity: int = 1,
                  detection_confidence: float = 0.5,
-                 tracking_confidence: float = 0.5):
+                 tracking_confidence: float = 0.5,
+                 enable_segmentation: bool = True):
         import mediapipe as mp
         self._pose = mp.solutions.pose.Pose(
             model_complexity=model_complexity,
             min_detection_confidence=detection_confidence,
             min_tracking_confidence=tracking_confidence,
+            enable_segmentation=enable_segmentation,
         )
+        # Cached from the most recent process() call -- a float32 [0,1]
+        # mask the same size as the FULL frame (mediapipe computes this
+        # alongside the pose landmarks, it can't be requested for an
+        # arbitrary crop after the fact). None if segmentation is disabled
+        # or no person was found this frame.
+        self._last_segmentation_mask: np.ndarray | None = None
 
     def process(self, frame: np.ndarray,
                 highlight_joints: frozenset = frozenset()) -> tuple[dict, np.ndarray]:
@@ -233,6 +319,8 @@ class MediaPipeBackend(PoseBackend):
         results = self._pose.process(rgb)
         rgb.flags.writeable = True
         annotated = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+
+        self._last_segmentation_mask = results.segmentation_mask
 
         if not results.pose_landmarks:
             return {}, annotated
@@ -243,10 +331,24 @@ class MediaPipeBackend(PoseBackend):
             for i, lm in enumerate(lms)
             if i in self._LANDMARK_NAMES
         }
-        return keypoints, _draw_skeleton(annotated, keypoints, highlight_joints)
+        # Drawing uses a filtered COPY (see _hide_occluded_pairs) so a
+        # side-on stance doesn't show the far shoulder/hip/knee/etc. sitting
+        # right on top of its near-side twin -- the returned `keypoints`
+        # itself stays exactly as mediapipe reported it, for anything
+        # downstream that wants the raw (occluded-but-guessed) values.
+        drawing_keypoints = _hide_occluded_pairs(keypoints)
+        return keypoints, _draw_skeleton(annotated, drawing_keypoints, highlight_joints)
 
     def close(self) -> None:
         self._pose.close()
+
+    def get_segmentation_mask(self, roi_image: np.ndarray,
+                               roi_transform: np.ndarray | None = None) -> np.ndarray | None:
+        if self._last_segmentation_mask is None or roi_transform is None:
+            return None
+        h, w = roi_image.shape[:2]
+        warped = cv2.warpAffine(self._last_segmentation_mask, roi_transform, (w, h))
+        return (warped > self._SEGMENTATION_THRESHOLD).astype("uint8") * 255
 
 
 class _KeypointState:
@@ -350,7 +452,11 @@ class YOLOBackend(PoseBackend):
 
         return {}, annotated
 
-    def get_segmentation_mask(self, roi_image: np.ndarray) -> np.ndarray | None:
+    def get_segmentation_mask(self, roi_image: np.ndarray,
+                               roi_transform: np.ndarray | None = None) -> np.ndarray | None:
+        # roi_transform is unused here -- YOLO segments the crop directly,
+        # it doesn't need the transform back to full-frame space the way
+        # MediaPipeBackend does (see PoseBackend.get_segmentation_mask).
         if self._seg_model is False:
             return None
         if self._seg_model is None:

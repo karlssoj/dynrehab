@@ -43,8 +43,14 @@ class PoseFrame:
     ankle_lateral_span: float = 0.0
     body_rotation_z: float = 0.0
     spine_curvature_ratio: float | None = None
-    spine_thoracic_curvature: float | None = None
-    spine_lumbar_curvature: float | None = None
+    # Signed Cobb-angle-style bend (degrees) of the thoracic (near-shoulder) and
+    # lumbar (near-hip) spine zones. Same 0=straight/higher=more-bent convention
+    # as every other *_bend_2d field, but -- unlike every other *_bend_2d field --
+    # SIGNED: positive = bula (outward bulge), negative = svank (inward cave).
+    # Use abs(...) for magnitude-only comparisons. None when no valid spine
+    # sample was available this tick (side-view YOLO11 only, sampled ~4Hz).
+    spine_thoracic_bend_2d: float | None = None
+    spine_lumbar_bend_2d: float | None = None
     keypoints: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:

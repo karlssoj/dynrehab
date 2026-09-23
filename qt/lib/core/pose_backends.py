@@ -24,6 +24,23 @@ _JOINT_RADIUS = 5
 _CONNECTION_COLOR = (0, 255, 0)
 _CONNECTION_THICKNESS = 2
 
+# BGR colors (OpenCV convention) for the spine-zone overlay.
+_SPINE_THORACIC_COLOR = (0, 165, 255)   # orange — upper-back/thoracic zone
+_SPINE_LUMBAR_COLOR = (255, 255, 0)     # cyan — lower-back/lumbar zone
+_SPINE_MIDDLE_COLOR = (120, 120, 120)   # dim grey — excluded middle third
+_SPINE_ANCHOR_COLOR = (255, 255, 255)   # white — shoulder/hinge/hip reference points
+_SPINE_ANCHOR_RADIUS = 3
+_SPINE_VERTEX_RADIUS = 6
+_SPINE_LINE_THICKNESS = 5  # thoracic/lumbar contour polyline thickness -- thicker
+# than the plain skeleton connection lines (_CONNECTION_THICKNESS) so the colored
+# zone is clearly distinguishable at a glance. The "middle" (excluded) zone still
+# uses _CONNECTION_THICKNESS, staying visually secondary to the two measured zones.
+_SPINE_TRIANGLE_COLOR = (255, 255, 255)
+_SPINE_TRIANGLE_THICKNESS = 1
+_SPINE_LABEL_FONT = cv2.FONT_HERSHEY_SIMPLEX
+_SPINE_LABEL_SCALE = 0.5
+_SPINE_LABEL_THICKNESS = 1
+
 
 def _draw_skeleton(frame: np.ndarray, keypoints: dict,
                    highlight_joints: frozenset = frozenset()) -> np.ndarray:
@@ -58,6 +75,107 @@ def draw_back_contour(frame: np.ndarray, points: list[tuple[float, float]]) -> n
                   _CONNECTION_THICKNESS)
     for x, y in points:
         cv2.circle(frame, (int(round(x)), int(round(y))), _JOINT_RADIUS, _JOINT_COLOR, -1)
+    return frame
+
+
+_SPINE_ZONE_COLORS = {
+    "thoracic": _SPINE_THORACIC_COLOR,
+    "lumbar": _SPINE_LUMBAR_COLOR,
+    "middle": _SPINE_MIDDLE_COLOR,
+}
+
+
+def draw_spine_zones(frame: np.ndarray, zone_points: list[tuple[tuple[float, float], str]],
+                      anchor_points: list[tuple[float, float]],
+                      thoracic_vertex: tuple[float, float] | None,
+                      lumbar_vertex: tuple[float, float] | None,
+                      thoracic_bend_deg: float | None,
+                      lumbar_bend_deg: float | None) -> np.ndarray:
+    """Draw the back contour color-coded by zone, plus the actual Cobb-angle
+    measurement triangles used to compute spine_thoracic_bend_2d /
+    spine_lumbar_bend_2d.
+
+    zone_points: [(point, zone_label), ...] in this frame's pixel
+      coordinates, ordered shoulder-end to hip-end (zone_label one of
+      "thoracic"/"lumbar"/"middle", see spine_contour.spine_zone_for_index)
+      -- typically the FULL-resolution contour (one point per raw row), not
+      a downsampled handful, so the drawn line follows the actual
+      silhouette. Drawn as a thick line, split into contiguous same-zone
+      segments and colored per zone, so it's visible at a glance which part
+      of the back drives which zone's number.
+    anchor_points: the three fixed reference points (shoulder, hinge, hip)
+      spine_zone_bend_angles measures from, in frame pixel coordinates
+      (spine_contour.sparse_points_in_frame on spine_bend_anchor_indices'
+      shoulder/boundary/hip indices) -- drawn as small white squares.
+    thoracic_vertex / lumbar_vertex: the actual peak-deviation points each
+      angle is measured AT, in frame pixel coordinates, or None if that
+      zone's angle wasn't available this tick.
+    thoracic_bend_deg / lumbar_bend_deg: the live values, printed next to
+      their vertex.
+
+    No-op (per element) for anything that's empty/None -- always safe to
+    call with partial data (e.g. contour found but angles unavailable)."""
+    # Draw the contour as a thick line, one polyline per contiguous run of
+    # the same zone label -- e.g. all "thoracic" points in a row become one
+    # orange polyline, all "lumbar" points become one cyan polyline, "middle"
+    # stays a thin neutral line. Each run's polyline is extended by one
+    # extra point past its own end (borrowed from the start of the next
+    # run) so consecutive segments share a point and the line stays
+    # visually unbroken across zone transitions.
+    n_points = len(zone_points)
+    i = 0
+    while i < n_points:
+        zone = zone_points[i][1]
+        j = i
+        while j < n_points and zone_points[j][1] == zone:
+            j += 1
+        segment = zone_points[i:min(j + 1, n_points)]
+        color = _SPINE_ZONE_COLORS.get(zone, _CONNECTION_COLOR)
+        thickness = _SPINE_LINE_THICKNESS if zone in ("thoracic", "lumbar") else _CONNECTION_THICKNESS
+        if len(segment) >= 2:
+            pts = np.array([[int(round(x)), int(round(y))] for (x, y), _ in segment], dtype=np.int32)
+            cv2.polylines(frame, [pts], isClosed=False, color=color, thickness=thickness)
+        i = j
+
+    for x, y in anchor_points:
+        pt = (int(round(x)), int(round(y)))
+        half = _SPINE_ANCHOR_RADIUS
+        cv2.rectangle(frame, (pt[0] - half, pt[1] - half), (pt[0] + half, pt[1] + half),
+                      _SPINE_ANCHOR_COLOR, -1)
+
+    shoulder_pt = anchor_points[0] if len(anchor_points) > 0 else None
+    hinge_pt = anchor_points[1] if len(anchor_points) > 1 else None
+    hip_pt = anchor_points[2] if len(anchor_points) > 2 else None
+
+    def _line(a, b):
+        if a is None or b is None:
+            return
+        cv2.line(frame, (int(round(a[0])), int(round(a[1]))),
+                  (int(round(b[0])), int(round(b[1]))), _SPINE_TRIANGLE_COLOR,
+                  _SPINE_TRIANGLE_THICKNESS)
+
+    if thoracic_vertex is not None:
+        _line(shoulder_pt, thoracic_vertex)
+        _line(thoracic_vertex, hinge_pt)
+        x, y = thoracic_vertex
+        cv2.circle(frame, (int(round(x)), int(round(y))), _SPINE_VERTEX_RADIUS,
+                  _SPINE_THORACIC_COLOR, -1)
+        if thoracic_bend_deg is not None:
+            cv2.putText(frame, f"{thoracic_bend_deg:.0f}deg", (int(round(x)) + 8, int(round(y))),
+                        _SPINE_LABEL_FONT, _SPINE_LABEL_SCALE, _SPINE_THORACIC_COLOR,
+                        _SPINE_LABEL_THICKNESS, cv2.LINE_AA)
+
+    if lumbar_vertex is not None:
+        _line(hinge_pt, lumbar_vertex)
+        _line(lumbar_vertex, hip_pt)
+        x, y = lumbar_vertex
+        cv2.circle(frame, (int(round(x)), int(round(y))), _SPINE_VERTEX_RADIUS,
+                  _SPINE_LUMBAR_COLOR, -1)
+        if lumbar_bend_deg is not None:
+            cv2.putText(frame, f"{lumbar_bend_deg:.0f}deg", (int(round(x)) + 8, int(round(y))),
+                        _SPINE_LABEL_FONT, _SPINE_LABEL_SCALE, _SPINE_LUMBAR_COLOR,
+                        _SPINE_LABEL_THICKNESS, cv2.LINE_AA)
+
     return frame
 
 

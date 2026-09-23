@@ -88,24 +88,30 @@ Fields marked [BOTH] are useful from either view.
     None there). The 0.35 threshold is an unvalidated starting point, not
     a proven clinical value — treat any threshold you use here the same way.
 
-  spine_thoracic_curvature / spine_lumbar_curvature [SIDE, YOLO11 only] —
-    time-smoothed signed curvature of the upper-back (thoracic, near the
-    shoulders) and lower-back (lumbar, near the hips) zones, same units and
-    sign convention as spine_curvature_ratio (positive = outward bulge,
-    negative = inward cave). Sampled and smoothed on the same
-    ~4-times-per-second cadence as spine_curvature_ratio — MOST FRAMES HAVE
-    both fields == None. ALWAYS check for None before comparing:
-      thoracic = pose_data.get("spine_thoracic_curvature")
-      lumbar = pose_data.get("spine_lumbar_curvature")
+  spine_thoracic_bend_2d / spine_lumbar_bend_2d [SIDE, YOLO11 only] —
+    time-smoothed Cobb-angle-style bend, in DEGREES, of the upper-back
+    (thoracic, near the shoulders) and lower-back (lumbar, near the hips)
+    zones. Same 0°=straight/higher=more-bent magnitude convention as every
+    other _bend_2d field (left_knee_bend_2d, etc.) — BUT, unlike every
+    other _bend_2d field, these two are SIGNED: positive = outward bulge
+    ("bula"), negative = inward cave ("svank"). Use abs(...) if you only
+    care about magnitude regardless of direction. Sampled and smoothed on
+    the same ~4-times-per-second cadence as spine_curvature_ratio — MOST
+    FRAMES HAVE both fields == None. ALWAYS check for None before comparing:
+      thoracic = pose_data.get("spine_thoracic_bend_2d")
+      lumbar = pose_data.get("spine_lumbar_bend_2d")
       if thoracic is not None and lumbar is not None:
           ...
     These two values are already smoothed over time — do NOT re-smooth or
     average them yourself frame-to-frame. Not available on MediaPipe-backed
-    exercises (always None there). Do NOT compare these to a fixed absolute
-    threshold — resting back shape varies a lot person to person. Instead
-    compare against the individual's own "spine_baseline" (see round_data /
-    rep_data below), captured once per round at the moment the pre-exercise
-    countdown ended.
+    exercises (always None there). Compare against a fixed absolute
+    threshold in DEGREES, exactly like any other quality target (knee
+    depth, elbow bend, etc.) — read the specific numeric limit from the
+    physiotherapist's Boundary values instructions if one is given there
+    (e.g. "upper back should not round more than 15 degrees"); only fall
+    back to a generic example threshold if the instructions don't specify
+    one, and mark any such fallback clearly as a starting point, not a
+    validated clinical value.
 
 --- KEYPOINTS ---
   keypoints: dict[str, tuple[float,float,float,float]] — name→(x,y,z,visibility)
@@ -130,6 +136,9 @@ ANGLE CONVENTION (mandatory — apply consistently across ALL exercises):
     0°  = straight arm
     70° = right angle
     120°= hand close to shoulder
+  EXCEPTION: spine_thoracic_bend_2d / spine_lumbar_bend_2d are the only
+  _bend_2d fields that can be NEGATIVE (signed: positive=bula, negative=
+  svank) — do not assume every _bend_2d-named field is non-negative.
 
 HELPER for frontal pelvic tilt (use instead of pose_data["pelvic_tilt"] from front camera):
   def _pelvic_tilt_2d(pose_data):
@@ -278,76 +287,31 @@ LYING / SEATED / KNEELING exercises:
   For lying exercises, set the 'return to straight' threshold generously (e.g. < 20°
   bend) because a relaxed lying leg may have 5-15° of apparent bend from soft tissue.
 
-SPINE BASELINE COMPARISON (SIDE VIEW, YOLO11 ONLY):
-  round_data / rep_data both include "spine_baseline": {"thoracic": float|None,
-  "lumbar": float|None} | None — captured once, at the exact moment this
-  round's pre-exercise countdown reached zero. It is None if no valid spine
-  reading was available during the countdown (e.g. YOLO11 segmentation not
-  running, or the patient was not yet standing in a side-on profile stance).
-  ALWAYS check for None before using it, and skip spine-based feedback
-  entirely when it is None — do NOT fall back to an absolute threshold.
+SPINE ANGLE THRESHOLDS (SIDE VIEW, YOLO11 ONLY):
+  spine_thoracic_bend_2d / spine_lumbar_bend_2d are plain degree values,
+  read and thresholded exactly like every other quality-target field (knee
+  depth, elbow bend, etc.) — NOT compared against a per-patient baseline.
+  If the physiotherapist's Boundary values instructions give a specific
+  numeric limit for upper-back or lower-back bend, use that number
+  directly. Otherwise fall back to a clearly-marked example threshold and
+  say so in a comment.
 
-  Compare each rep/round's frames against the round's own baseline rather
-  than judging spine_thoracic_curvature / spine_lumbar_curvature against a
-  fixed cutoff — resting back shape varies a lot person to person, so the
-  same raw value can be normal for one patient and a problem for another.
-
-  def _spine_zone_changes(frames: list, baseline: dict | None) -> dict:
-      # Compares this rep/round's frames against the round-start baseline.
-      # Returns {"thoracic": {"delta": float, "rate": float} | None,
-      #          "lumbar": {"delta": float, "rate": float} | None}.
-      # delta = signed deviation from baseline with the largest magnitude
-      # seen in these frames. rate = delta / seconds spanned by the
-      # qualifying samples (a crude speed-of-change proxy).
-      if not baseline:
-          return {"thoracic": None, "lumbar": None}
-      result = {}
-      for zone in ("thoracic", "lumbar"):
-          base = baseline.get(zone)
-          if base is None:
-              result[zone] = None
-              continue
-          samples = [(f.get("timestamp", 0.0), f.get(f"spine_{zone}_curvature"))
-                     for f in frames if f.get(f"spine_{zone}_curvature") is not None]
-          if not samples:
-              result[zone] = None
-              continue
-          deltas = [(t, v - base) for t, v in samples]
-          t0 = deltas[0][0]
-          t1, biggest = max(deltas, key=lambda td: abs(td[1]))
-          span = max(t1 - t0, 0.5)  # avoid a near-zero divisor
-          result[zone] = {"delta": biggest, "rate": biggest / span}
-      return result
-
-  Usage pattern for flagging LARGE or FAST changes (copy into whichever
-  feedback function is in use for this exercise):
-      changes = _spine_zone_changes(rep_data["frames"], rep_data.get("spine_baseline"))
-      for zone, label in (("lumbar", "lower back"), ("thoracic", "upper back")):
-          info = changes.get(zone)
-          if info is None:
-              continue
-          if abs(info["delta"]) > 0.04:    # LARGE — starting point, not a validated threshold.
-              # Simulated against a realistic hip-shoulder chord (~180px):
-              # a clearly visible, deliberate rounding of the upper back
-              # (silhouette bulging ~25px outward on a ~35px half-width
-              # torso — a substantial, obvious hunch) produces a zone value
-              # of only ~0.14. A subtler but still real rounding (~15px)
-              # gives ~0.08. Do NOT use 0.15+ here — that only fires on
-              # extreme, near-maximal deformation and misses real issues.
-              feedback.append(f"Your {label} position changed noticeably from your starting posture.")
-          elif abs(info["rate"]) > 0.15:    # FAST — starting point, not a validated threshold
-              feedback.append(f"Try to keep your {label} from moving so quickly.")
-
-  For INCONSISTENT changes (form varying a lot rep to rep, e.g. from
-  fatigue): in get_session_summary, compute each rep's peak zone delta from
-  session_data["rounds"][i]["frames"] against that round's own
-  "spine_baseline", collect them across reps, and flag a high spread
-  (statistics.pstdev, or max(deltas) - min(deltas)) greater than ~0.15 as
-  inconsistent form — scaled the same way as the LARGE threshold above,
-  since it's built from the same delta values. Do NOT hardcode a single
-  "this spread is bad" threshold as clinically validated — treat it the
-  same as the LARGE/FAST thresholds above: a starting point to refine
-  from real session data.
+  Usage pattern (copy into whichever feedback function is in use for this
+  exercise):
+      thoracic_vals = [f.get("spine_thoracic_bend_2d") for f in frames
+                        if f.get("spine_thoracic_bend_2d") is not None]
+      lumbar_vals = [f.get("spine_lumbar_bend_2d") for f in frames
+                      if f.get("spine_lumbar_bend_2d") is not None]
+      if thoracic_vals and max(thoracic_vals) > 15:   # degrees — example threshold,
+          # not a validated clinical value unless the instructions gave one.
+          feedback.append("Try to keep your upper back from rounding forward so much.")
+      if lumbar_vals and min(lumbar_vals) < -15:      # degrees — example threshold,
+          # not a validated clinical value unless the instructions gave one.
+          feedback.append("Avoid arching your lower back so much — engage your core.")
+  Remember the sign convention: positive = bula (outward bulge/rounding),
+  negative = svank (inward cave/arch) — check the correct side of zero for
+  each direction of concern, and use abs(...) only when either direction
+  is equally a problem.
 """
 
 
@@ -774,8 +738,7 @@ def generate_round_feedback(round_data: dict) -> list[str]:
     #   "round_number": int,
     #   "rep_count": int,
     #   "frames": list[dict],
-    #   "duration_seconds": float,
-    #   "spine_baseline": {{"thoracic": float, "lumbar": float}} | None  # see SPINE BASELINE section below
+    #   "duration_seconds": float
     # }}
     # Return a list of spoken sentences. Use as many sentences as needed.
     # - Always open with rep count + one specific positive observation.
@@ -799,8 +762,7 @@ def generate_rep_feedback(rep_data: dict) -> list[str]:
     # rep_data: {
     #   "rep_number": int,      # total reps completed so far (1-indexed)
     #   "round_number": int,    # current round number
-    #   "frames": list[dict],   # recent pose frames (last ~2 seconds)
-    #   "spine_baseline": {"thoracic": float, "lumbar": float} | None  # see SPINE BASELINE section below
+    #   "frames": list[dict]    # recent pose frames (last ~2 seconds)
     # }
     # Return a list of spoken sentences — one sentence per issue found (no limit).
     # - Open with a short rep acknowledgment (e.g., "Rep 3 done.").
@@ -820,7 +782,7 @@ def get_session_summary(session_data: dict) -> list[str]:
     # session_data: {
     #   "total_reps": int,
     #   "total_duration_seconds": float,
-    #   "rounds": list[dict],               # [{round_number, rep_count, frames, duration_seconds, spine_baseline}, ...]
+    #   "rounds": list[dict],               # [{round_number, rep_count, frames, duration_seconds}, ...]
     #   "rep_cues": list[str],              # cues spoken in during_exercise mode
     #   "round_feedback": list[list[str]],  # per-round feedback spoken after each window
     #   "angle_stats": {name: {"min": float, "max": float}, ...}  # GLOBAL — do NOT use for temporal claims
@@ -1169,6 +1131,26 @@ Rules:
 """
 
 
+def _strip_markdown_fence(code: str) -> str:
+    """Defensive cleanup: despite the prompt's explicit "no markdown fences"
+    instruction, the model occasionally wraps its response in a ```python
+    ... ``` code fence anyway (non-deterministic — the same prompt can
+    produce a clean response on one attempt and a fenced one on the next).
+    A leading fence alone is enough to make the whole module a syntax
+    error at line 1, indistinguishable at a glance from a genuine code
+    problem. Strip a single leading fence line (```python, ```py, or bare
+    ```) and a single trailing ``` line if present; leaves the text
+    unchanged if it isn't fenced."""
+    stripped = code.strip()
+    lines = stripped.split("\n")
+    if lines and lines[0].strip().startswith("```"):
+        lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
+    return stripped
+
+
 class LLMService:
     def __init__(self, conn: sqlite3.Connection, api_key: str):
         self.conn = conn
@@ -1219,6 +1201,7 @@ class LLMService:
                 if message.stop_reason == "max_tokens":
                     print(f"[llm_service] attempt {attempt} response truncated (hit max_tokens)")
                     continue
+                response_text = _strip_markdown_fence(response_text)
                 validation = validate_module(response_text, feedback_mode=feedback_mode or ["after_window"])
                 if validation["valid"]:
                     status = "validated"

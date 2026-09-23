@@ -2,11 +2,18 @@ import pytest
 import numpy as np
 import cv2
 
+import math
+
 from core.spine_contour import (facing_left, crop_and_rotate_roi, extract_back_contour,
                                   signed_curvature_ratio, signed_curvature_profile,
+                                  signed_curvature_profile_indices, spine_zone_bend_angles,
+                                  spine_bend_anchor_indices, spine_zone_for_index,
+                                  sparse_points_in_frame,
                                   spine_zone_curvature, back_contour_points_in_frame,
                                   downsample_points, _evenly_spaced_indices, _bucket_indices,
-                                  _MIN_CHORD_PX, _ROI_MARGIN_FRAC, _ROI_END_PAD_FRAC)
+                                  _angle_2d,
+                                  _MIN_CHORD_PX, _ROI_MARGIN_FRAC, _ROI_END_PAD_FRAC,
+                                  _SPINE_ZONE_FRACTION)
 
 
 def test_facing_left_true_when_nose_left_of_shoulder():
@@ -549,3 +556,278 @@ def test_spine_zone_curvature_custom_zone_fraction():
     thoracic, lumbar = spine_zone_curvature(profile, zone_fraction=2.0 / 7.0)
     assert thoracic == pytest.approx(1.0)
     assert lumbar == pytest.approx(-1.0)
+
+
+# --- _angle_2d -----------------------------------------------------------
+
+def test_angle_2d_collinear_points_gives_180():
+    assert _angle_2d((0.0, 0.0), (5.0, 5.0), (10.0, 10.0)) == pytest.approx(180.0)
+
+
+def test_angle_2d_right_angle_gives_90():
+    assert _angle_2d((1.0, 0.0), (0.0, 0.0), (0.0, 1.0)) == pytest.approx(90.0)
+
+
+def test_angle_2d_degenerate_zero_length_vector_gives_180():
+    # b coincides with a -> vector b->a is zero-length -> degenerate guard fires.
+    assert _angle_2d((3.0, 4.0), (3.0, 4.0), (0.0, 1.0)) == pytest.approx(180.0)
+
+
+# --- signed_curvature_profile_indices -------------------------------------
+
+def test_signed_curvature_profile_indices_matches_signed_curvature_profile_values():
+    back_profile = [20.0 + i for i in range(21)]
+    values_only = signed_curvature_profile(back_profile, chord_len=100.0, n=7)
+    indexed = signed_curvature_profile_indices(back_profile, chord_len=100.0, n=7)
+    assert indexed is not None
+    assert [v for v, i in indexed] == pytest.approx(values_only)
+
+
+def test_signed_curvature_profile_indices_index_points_at_the_true_spike_row():
+    n_raw = 21
+    profile = [10.0] * n_raw
+    profile[3] = 25.0  # a single spike inside what will be the first bucket
+    indexed = signed_curvature_profile_indices(profile, chord_len=100.0, n=7)
+    assert indexed is not None
+    value, index = indexed[0]  # bucket 0 covers raw indices 0-2... or wherever row 3 lands
+    # Whichever bucket contains raw row 3 must report index == 3.
+    matching = [pair for pair in indexed if pair[1] == 3]
+    assert len(matching) == 1
+    assert matching[0][0] != 0.0
+
+
+def test_signed_curvature_profile_indices_none_for_empty_or_nonpositive_chord():
+    assert signed_curvature_profile_indices([], chord_len=100.0, n=5) is None
+    assert signed_curvature_profile_indices([1.0, 2.0], chord_len=0.0, n=5) is None
+
+
+# --- spine_zone_bend_angles ------------------------------------------------
+
+def test_spine_zone_bend_angles_straight_profile_gives_near_zero():
+    back_profile = [10.0 + 0.1 * i for i in range(180)]  # perfectly linear
+    indices = signed_curvature_profile_indices(back_profile, chord_len=180.0, n=10)
+    thoracic, lumbar = spine_zone_bend_angles(back_profile, 180.0, indices)
+    assert thoracic == pytest.approx(0.0, abs=1e-6)
+    assert lumbar == pytest.approx(0.0, abs=1e-6)
+
+
+def test_spine_zone_bend_angles_known_synthetic_case_matches_hand_computed_degrees():
+    # 21-row profile, flat baseline of 10.0, with a clear outward spike in the
+    # thoracic zone (row 3) and an inward spike in the lumbar zone (row 17).
+    n_raw = 21
+    back_profile = [10.0] * n_raw
+    back_profile[3] = 25.0
+    back_profile[17] = -5.0
+    chord_len = 20.0
+
+    indices = signed_curvature_profile_indices(back_profile, chord_len, n=7)
+    thoracic, lumbar = spine_zone_bend_angles(back_profile, chord_len, indices)
+    assert thoracic is not None and lumbar is not None
+
+    # Independently hand-derived expected values: with zone_fraction=1/3 and
+    # n=7, zone_size=round(7/3)=2 -> thoracic zone = raw rows 0-6 aggregated
+    # into buckets 0-1 (2 of 7 buckets), lumbar zone = the last 2 buckets
+    # (raw rows covering 14-20). boundary_fraction=0.5 -> boundary_idx =
+    # round(0.5*20) = 10. Anchor points: shoulder=(10,0), boundary=(10,10),
+    # hip=(10,20); vertices at the true spike rows (25,3) and (-5,17).
+    def expected_bend(vertex, ref_a, ref_b, sign_source):
+        vax, vay = ref_a[0] - vertex[0], ref_a[1] - vertex[1]
+        vcx, vcy = ref_b[0] - vertex[0], ref_b[1] - vertex[1]
+        mag = math.hypot(vax, vay) * math.hypot(vcx, vcy)
+        cosine = max(-1.0, min(1.0, (vax * vcx + vay * vcy) / mag))
+        angle = math.degrees(math.acos(cosine))
+        return math.copysign(180.0 - angle, sign_source)
+
+    expected_thoracic = expected_bend((25.0, 3), (10.0, 0), (10.0, 10), 1.0)
+    expected_lumbar = expected_bend((-5.0, 17), (10.0, 10), (10.0, 20), -1.0)
+
+    assert thoracic == pytest.approx(expected_thoracic, abs=0.01)
+    assert lumbar == pytest.approx(expected_lumbar, abs=0.01)
+    assert thoracic > 0  # outward spike -> bula -> positive
+    assert lumbar < 0    # inward spike -> svank -> negative
+
+
+def test_spine_zone_bend_angles_degenerate_vertex_at_boundary_returns_zero():
+    # 7-row profile, zone_fraction=1/3 -> zone_size=2 -> thoracic zone = rows
+    # 0-1. boundary_fraction=0.1 -> boundary_idx = round(0.1*6) = 1, which
+    # coincides with the thoracic zone's own peak-deviation row -> the
+    # thoracic vertex and the boundary point become the same coordinate ->
+    # a zero-length ray -> _angle_2d's degenerate guard -> bend 0, not a crash.
+    back_profile = [0.0, 5.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    indices = signed_curvature_profile_indices(back_profile, chord_len=10.0, n=7)
+    thoracic, lumbar = spine_zone_bend_angles(back_profile, 10.0, indices, boundary_fraction=0.1)
+    assert thoracic == pytest.approx(0.0)
+
+
+def test_spine_zone_bend_angles_none_when_profile_indices_none():
+    assert spine_zone_bend_angles([1.0, 2.0, 3.0], 100.0, []) == (None, None)
+
+
+def test_spine_zone_bend_angles_none_when_back_profile_too_short():
+    indices = [(0.1, 0), (0.2, 1)]
+    assert spine_zone_bend_angles([10.0, 11.0], 100.0, indices) == (None, None)
+
+
+def test_spine_zone_bend_angles_none_when_chord_len_nonpositive():
+    back_profile = [10.0] * 21
+    indices = signed_curvature_profile_indices(back_profile, chord_len=20.0, n=7)
+    assert spine_zone_bend_angles(back_profile, 0.0, indices) == (None, None)
+
+
+def test_spine_zone_bend_angles_n_less_than_3_falls_back_to_whole_profile():
+    back_profile = [10.0, 10.0, 25.0, 10.0, 10.0]
+    indices = signed_curvature_profile_indices(back_profile, chord_len=20.0, n=2)
+    assert indices is not None and len(indices) == 2
+    thoracic, lumbar = spine_zone_bend_angles(back_profile, 20.0, indices)
+    assert thoracic is not None and lumbar is not None
+    assert thoracic == pytest.approx(lumbar)
+
+
+def test_spine_zone_bend_angles_ignores_ordinary_body_taper_not_spine_curvature():
+    """Regression test for a real bug: a torso naturally tapers from a wider
+    shoulder width to a narrower waist and back out to a wider hip width --
+    completely ordinary anatomy, present even for a perfectly straight
+    spine. The angle geometry must anchor each zone's triangle to THIS
+    tick's own shoulder/hip readings (deviation from the shoulder-hip
+    chord, always exactly 0 at both ends) rather than the raw silhouette
+    widths (which differ between the shoulder and hip ends for virtually
+    every real body, and can shift independently of spine shape e.g.
+    between standing and a squat) -- otherwise ordinary body-width taper
+    alone reads as a large, spurious "bend" no matter how the back is
+    actually held."""
+    n_raw = 180
+    shoulder_w, waist_w, hip_w = 45.0, 25.0, 50.0  # shoulder width != hip width
+    back_profile = []
+    for i in range(n_raw):
+        frac = i / (n_raw - 1)
+        if frac < 0.5:
+            back_profile.append(shoulder_w - (shoulder_w - waist_w) * (frac / 0.5))
+        else:
+            back_profile.append(waist_w + (hip_w - waist_w) * ((frac - 0.5) / 0.5))
+
+    indices = signed_curvature_profile_indices(back_profile, chord_len=180.0, n=10)
+    thoracic, lumbar = spine_zone_bend_angles(back_profile, 180.0, indices)
+    assert thoracic is not None and lumbar is not None
+    # Ordinary taper alone must stay well clear of any plausible "large bend"
+    # threshold (single-digit degrees), not the tens-of-degrees a raw-width
+    # triangle would report for this same shape.
+    assert abs(thoracic) < 2.0
+    assert abs(lumbar) < 2.0
+
+
+def test_spine_zone_bend_angles_detects_real_curvature_on_top_of_body_taper():
+    # Same tapering body shape as above, but now with a genuine, sustained
+    # outward bulge added in the thoracic zone -- must still be detected
+    # clearly despite the shoulder/hip width mismatch that would otherwise
+    # confound a raw-width-based triangle.
+    n_raw = 180
+    shoulder_w, waist_w, hip_w = 45.0, 25.0, 50.0
+    back_profile = []
+    for i in range(n_raw):
+        frac = i / (n_raw - 1)
+        if frac < 0.5:
+            back_profile.append(shoulder_w - (shoulder_w - waist_w) * (frac / 0.5))
+        else:
+            back_profile.append(waist_w + (hip_w - waist_w) * ((frac - 0.5) / 0.5))
+    for i in range(20, 35):
+        back_profile[i] += 20.0  # a real, sustained thoracic bulge
+
+    indices = signed_curvature_profile_indices(back_profile, chord_len=180.0, n=10)
+    thoracic, lumbar = spine_zone_bend_angles(back_profile, 180.0, indices)
+    assert thoracic is not None
+    assert thoracic > 20.0  # clearly detected, not swamped by the taper
+    assert thoracic > 0     # outward bulge -> positive sign
+
+
+def test_spine_zone_bend_angles_stays_correct_up_to_default_zone_fraction():
+    """Regression test for a real, measured cliff: growing zone_fraction
+    past ~1/3 pulls in a bucket from the profile's middle region, where
+    ordinary (non-spine) body-taper deviation from the shoulder-hip chord
+    is largest -- for this exact synthetic body+bulge, zone_fraction=0.35
+    already flips a genuine +24 degree thoracic bulge to a wrong -14
+    degrees, and stays wrong through 0.45. This locks in that the DEFAULT
+    _SPINE_ZONE_FRACTION stays on the correct (narrow) side of that cliff.
+    If this ever needs to change, re-verify against this exact scenario
+    first -- see _SPINE_ZONE_FRACTION's docstring in spine_contour.py."""
+    n_raw = 180
+    shoulder_w, waist_w, hip_w = 45.0, 25.0, 50.0
+    back_profile = []
+    for i in range(n_raw):
+        frac = i / (n_raw - 1)
+        if frac < 0.5:
+            back_profile.append(shoulder_w - (shoulder_w - waist_w) * (frac / 0.5))
+        else:
+            back_profile.append(waist_w + (hip_w - waist_w) * ((frac - 0.5) / 0.5))
+    for i in range(20, 35):
+        back_profile[i] += 20.0
+
+    indices = signed_curvature_profile_indices(back_profile, chord_len=180.0, n=10)
+    thoracic, _ = spine_zone_bend_angles(back_profile, 180.0, indices, _SPINE_ZONE_FRACTION)
+    assert thoracic > 20.0
+    assert thoracic > 0
+
+
+# --- spine_bend_anchor_indices ---------------------------------------------
+
+def test_spine_bend_anchor_indices_matches_spine_zone_bend_angles_vertex_choice():
+    n_raw = 21
+    back_profile = [10.0] * n_raw
+    back_profile[3] = 25.0
+    back_profile[17] = -5.0
+    indices = signed_curvature_profile_indices(back_profile, chord_len=20.0, n=7)
+    anchors = spine_bend_anchor_indices(back_profile, indices)
+    assert anchors == (0, 3, 10, 17, 20)
+
+
+def test_spine_bend_anchor_indices_none_when_profile_indices_empty():
+    assert spine_bend_anchor_indices([1.0, 2.0, 3.0], []) is None
+
+
+def test_spine_bend_anchor_indices_none_when_back_profile_too_short():
+    assert spine_bend_anchor_indices([1.0, 2.0], [(0.1, 0), (0.2, 1)]) is None
+
+
+# --- spine_zone_for_index ---------------------------------------------------
+
+def test_spine_zone_for_index_classifies_thoracic_middle_lumbar():
+    n_raw = 30  # zone_fraction=1/3 -> zone_size = 10 -> thoracic 0-9, lumbar 20-29
+    assert spine_zone_for_index(0, n_raw) == "thoracic"
+    assert spine_zone_for_index(9, n_raw) == "thoracic"
+    assert spine_zone_for_index(10, n_raw) == "middle"
+    assert spine_zone_for_index(19, n_raw) == "middle"
+    assert spine_zone_for_index(20, n_raw) == "lumbar"
+    assert spine_zone_for_index(29, n_raw) == "lumbar"
+
+
+def test_spine_zone_for_index_custom_zone_fraction():
+    assert spine_zone_for_index(0, 10, zone_fraction=0.5) == "thoracic"
+    assert spine_zone_for_index(9, 10, zone_fraction=0.5) == "lumbar"
+
+
+# --- sparse_points_in_frame --------------------------------------------------
+
+def test_sparse_points_in_frame_maps_selected_indices_only():
+    frame = np.zeros((400, 400, 3), dtype=np.uint8)
+    hip_px = (200.0, 300.0)
+    shoulder_px = (200.0, 150.0)  # vertical, untilted chord
+    result = crop_and_rotate_roi(frame, hip_px, shoulder_px)
+    assert result is not None
+    _, hip_point, shoulder_point, chord_len, M = result
+
+    back_profile = [10.0, 12.0, 14.0, 16.0, 18.0]
+    points = sparse_points_in_frame(M, hip_point, shoulder_point, back_profile,
+                                     indices=[0, 2, 4], on_right_side=True)
+    assert len(points) == 3
+    # Vertical/untilted chord -> M is a pure translation, so mapping is exact:
+    # orig_x = hip_px[0] + dist, orig_y = shoulder_px[1] + row_index.
+    assert points[0] == (pytest.approx(210.0, abs=0.5), pytest.approx(150.0, abs=0.5))
+    assert points[1] == (pytest.approx(214.0, abs=0.5), pytest.approx(152.0, abs=0.5))
+    assert points[2] == (pytest.approx(218.0, abs=0.5), pytest.approx(154.0, abs=0.5))
+
+
+def test_sparse_points_in_frame_empty_indices_gives_empty_list():
+    frame = np.zeros((400, 400, 3), dtype=np.uint8)
+    result = crop_and_rotate_roi(frame, (200.0, 300.0), (200.0, 150.0))
+    assert result is not None
+    _, hip_point, shoulder_point, chord_len, M = result
+    assert sparse_points_in_frame(M, hip_point, shoulder_point, [1.0, 2.0], [], True) == []

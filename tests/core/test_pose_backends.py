@@ -309,3 +309,90 @@ def test_draw_back_contour_no_op_for_empty_list():
     draw_back_contour(frame, [])
     assert frame.max() == 0
     assert frame.max() == 0
+
+
+def test_draw_spine_zones_colors_contour_line_by_zone():
+    """The contour is drawn as a thick polyline per contiguous zone run
+    (not individual dots) -- verify each zone's segment is drawn in its
+    own color by sampling a pixel along each straight horizontal run."""
+    from core.pose_backends import draw_spine_zones, _SPINE_THORACIC_COLOR, _SPINE_LUMBAR_COLOR, _SPINE_MIDDLE_COLOR
+    frame = np.zeros((200, 200, 3), dtype=np.uint8)
+    zone_points = (
+        [((10.0 + i, 20.0), "thoracic") for i in range(10)]
+        + [((10.0 + i, 100.0), "middle") for i in range(10)]
+        + [((10.0 + i, 180.0), "lumbar") for i in range(10)]
+    )
+    draw_spine_zones(frame, zone_points, [], None, None, None, None)
+    assert tuple(int(c) for c in frame[20, 15]) == _SPINE_THORACIC_COLOR
+    assert tuple(int(c) for c in frame[100, 15]) == _SPINE_MIDDLE_COLOR
+    assert tuple(int(c) for c in frame[180, 15]) == _SPINE_LUMBAR_COLOR
+
+
+def test_draw_spine_zones_thoracic_and_lumbar_lines_are_thicker_than_middle():
+    from core.pose_backends import draw_spine_zones, _SPINE_LINE_THICKNESS, _CONNECTION_THICKNESS
+    assert _SPINE_LINE_THICKNESS > _CONNECTION_THICKNESS
+
+    frame_thoracic = np.zeros((200, 200, 3), dtype=np.uint8)
+    zone_points_thoracic = [((10.0 + i, 100.0), "thoracic") for i in range(10)]
+    draw_spine_zones(frame_thoracic, zone_points_thoracic, [], None, None, None, None)
+
+    frame_middle = np.zeros((200, 200, 3), dtype=np.uint8)
+    zone_points_middle = [((10.0 + i, 100.0), "middle") for i in range(10)]
+    draw_spine_zones(frame_middle, zone_points_middle, [], None, None, None, None)
+
+    # A thicker line covers more vertical pixels at a fixed x than a thinner one.
+    thoracic_span = np.count_nonzero(frame_thoracic[:, 15].any(axis=-1))
+    middle_span = np.count_nonzero(frame_middle[:, 15].any(axis=-1))
+    assert thoracic_span > middle_span
+
+
+def test_draw_spine_zones_segments_stay_connected_across_zone_boundary():
+    """A realistic continuous contour (one point per row, moving straight
+    down) split into two zone runs must not show a gap in the drawn line
+    at the exact row where the zone label changes."""
+    from core.pose_backends import draw_spine_zones
+    frame = np.zeros((200, 200, 3), dtype=np.uint8)
+    zone_points = (
+        [((100.0, float(y)), "thoracic") for y in range(20, 30)]
+        + [((100.0, float(y)), "lumbar") for y in range(30, 40)]
+    )
+    draw_spine_zones(frame, zone_points, [], None, None, None, None)
+    for y in range(20, 40):
+        assert frame[y, 100].any(), f"gap in the drawn line at row {y}"
+
+
+def test_draw_spine_zones_no_op_for_empty_input():
+    from core.pose_backends import draw_spine_zones
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+    draw_spine_zones(frame, [], [], None, None, None, None)
+    assert frame.max() == 0
+
+
+def test_draw_spine_zones_draws_anchor_markers():
+    from core.pose_backends import draw_spine_zones, _SPINE_ANCHOR_COLOR
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+    draw_spine_zones(frame, [], [(50.0, 50.0)], None, None, None, None)
+    assert tuple(int(c) for c in frame[50, 50]) == _SPINE_ANCHOR_COLOR
+
+
+def test_draw_spine_zones_draws_vertex_and_triangle_when_provided():
+    from core.pose_backends import draw_spine_zones, _SPINE_THORACIC_COLOR
+    frame = np.zeros((200, 200, 3), dtype=np.uint8)
+    anchor_points = [(20.0, 100.0), (100.0, 100.0), (180.0, 100.0)]  # shoulder, hinge, hip
+    thoracic_vertex = (60.0, 60.0)
+    draw_spine_zones(frame, [], anchor_points, thoracic_vertex, None, 12.5, None)
+    x, y = thoracic_vertex
+    assert tuple(int(c) for c in frame[int(y), int(x)]) == _SPINE_THORACIC_COLOR
+    # A line from the vertex toward the shoulder anchor must have been drawn somewhere along the way.
+    assert frame.max() > 0
+
+
+def test_draw_spine_zones_missing_vertex_draws_no_triangle_for_that_zone():
+    from core.pose_backends import draw_spine_zones, _SPINE_ANCHOR_RADIUS
+    frame = np.zeros((200, 200, 3), dtype=np.uint8)
+    anchor_points = [(20.0, 100.0), (100.0, 100.0), (180.0, 100.0)]
+    draw_spine_zones(frame, [], anchor_points, None, None, None, None)
+    # Only the three small anchor squares should be drawn -- no vertex circle, no triangle lines.
+    nonzero_rows = np.unique(np.nonzero(frame)[0])
+    expected_rows = set(range(100 - _SPINE_ANCHOR_RADIUS, 100 + _SPINE_ANCHOR_RADIUS + 1))
+    assert set(nonzero_rows.tolist()).issubset(expected_rows)

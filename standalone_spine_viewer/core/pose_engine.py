@@ -49,6 +49,19 @@ _SPINE_MAX_SHOULDER_LATERAL_RATIO = 0.4  # informed starting point, not validate
 # 0.8-1.0 for typical body proportions. Override via
 # SPINE_MAX_SHOULDER_LATERAL_RATIO.
 
+_SPINE_MIN_KEYPOINT_CONFIDENCE = 0.3  # informed starting point, not validated --
+# minimum hip/shoulder confidence (index 3 of the keypoint tuple) required before
+# attempting to sample the spine at all. For YOLOBackend this is on top of its own
+# YOLO_KEYPOINT_CONF_THRESHOLD (pose_backends.py) gate, which already drops/holds
+# low-confidence keypoints before they even reach here. MediaPipeBackend applies
+# NO such pre-filter -- it reports every landmark's raw visibility score
+# unconditionally -- and that visibility was observed to read well below 0.3 for
+# the hip landmark for extended stretches even while the person is genuinely
+# standing in profile (a mediapipe quirk, not a bug in this file), which is what
+# silently suppressed the drawn line for long stretches at the start. Lower this
+# (e.g. via SPINE_MIN_KEYPOINT_CONFIDENCE) if that happens. Override via the
+# SPINE_MIN_KEYPOINT_CONFIDENCE env var.
+
 _SPINE_ZONE_FRACTION = 1.0 / 3.0  # see spine_contour.py's _SPINE_ZONE_FRACTION —
 # governs the ANGLE MEASUREMENT's vertex search. Do not raise this to make the
 # on-screen zone coloring look wider — see _SPINE_ZONE_DISPLAY_FRACTION below for
@@ -198,6 +211,27 @@ _SPINE_KNEE_POSITION_MIN_CUTOFF = 0.3
 _SPINE_KNEE_POSITION_BETA = 0.015
 _SPINE_KNEE_POSITION_D_CUTOFF = 1.0
 
+# Automated "upright anchor" stabilization: the drawn contour's top/bottom
+# points were reported to visibly shift around depending on exactly how the
+# person is leaning, even while essentially standing (small sway). Rather
+# than a one-shot manual calibration (tried and reverted before -- freezing
+# a snapshot's rotation/scale forever kills real bend tracking), this
+# maintains a SLOW, continuously-updating "upright reference" for hip_px/
+# shoulder_px, fed only on ticks where hip_bend_deg is low (near-straight),
+# and blends the live hip_px/shoulder_px toward that reference by a weight
+# that itself comes from hip_bend_deg via the SAME _spine_scan_shift_frac
+# interpolation used for the shift fraction (weight=1.0 i.e. fully-reference
+# at/below SPINE_SCAN_SHIFT_BEND_LOW_DEG, weight=0.0 i.e. fully-live at/above
+# SPINE_SCAN_SHIFT_BEND_HIGH_DEG). The moment a real bend starts, the weight
+# falls back toward 0 and the anchor is fully live again -- the curve must
+# always keep following genuine back movement, only near-stationary
+# standing should be stabilized. Informed starting point, not validated.
+_SPINE_UPRIGHT_REF_ALPHA = 0.03  # override via SPINE_UPRIGHT_REF_ALPHA -- how
+# quickly the slow reference itself drifts toward the live position while
+# upright (an exponential moving average rate, not a OneEuroFilter -- a
+# plain, fixed-rate average is simpler to reason about for something meant
+# to average out ordinary sway over several seconds).
+
 
 def _should_sample_spine(last_sample_time: float, now: float,
                           interval: float = _SPINE_SAMPLE_INTERVAL_SECS) -> bool:
@@ -249,6 +283,8 @@ class PoseEngine:
             os.getenv("SPINE_CONTOUR_POINT_COUNT", _SPINE_CONTOUR_POINT_COUNT))
         self._spine_max_shoulder_lateral_ratio = float(
             os.getenv("SPINE_MAX_SHOULDER_LATERAL_RATIO", _SPINE_MAX_SHOULDER_LATERAL_RATIO))
+        self._spine_min_keypoint_confidence = float(
+            os.getenv("SPINE_MIN_KEYPOINT_CONFIDENCE", _SPINE_MIN_KEYPOINT_CONFIDENCE))
         self._spine_zone_fraction = float(
             os.getenv("SPINE_ZONE_FRACTION", _SPINE_ZONE_FRACTION))
         self._spine_zone_display_fraction = float(
@@ -302,6 +338,14 @@ class PoseEngine:
             spine_knee_pos_min_cutoff, spine_knee_pos_beta, spine_knee_pos_d_cutoff)
         self._spine_error_logged = False
         self._spine_debug = os.getenv("SPINE_DEBUG", "").lower() in ("1", "true", "yes")
+        self._spine_upright_ref_alpha = float(
+            os.getenv("SPINE_UPRIGHT_REF_ALPHA", _SPINE_UPRIGHT_REF_ALPHA))
+        # The slow-moving "upright reference" position for hip_px/shoulder_px
+        # (see _SPINE_UPRIGHT_REF_ALPHA) -- None until the first near-straight
+        # tick, then continuously nudged toward the live position on every
+        # near-straight tick afterward.
+        self._spine_upright_ref_hip_px: tuple[float, float] | None = None
+        self._spine_upright_ref_shoulder_px: tuple[float, float] | None = None
         print(f"[pose_engine] spine sample interval: {self._spine_sample_interval}s "
               f"({'from SPINE_SAMPLE_INTERVAL_SECS env var' if 'SPINE_SAMPLE_INTERVAL_SECS' in os.environ else 'default'})")
 
@@ -379,12 +423,32 @@ class PoseEngine:
                             shoulder = keypoints.get("left_shoulder") or keypoints.get("right_shoulder")
                             knee = keypoints.get("left_knee") if hip_is_left else keypoints.get("right_knee")
                             in_profile = False
+                            lateral_ratio = None
                             if hip and shoulder:
                                 torso_span = math.hypot(shoulder[0] - hip[0], shoulder[1] - hip[1])
                                 if torso_span > 1e-6:
                                     lateral_ratio = pose_frame.shoulder_lateral_span / torso_span
                                     in_profile = lateral_ratio <= self._spine_max_shoulder_lateral_ratio
-                            if hip and shoulder and min(hip[3], shoulder[3]) >= 0.3 and in_profile:
+                            gate_passed = bool(hip and shoulder
+                                               and min(hip[3], shoulder[3]) >= self._spine_min_keypoint_confidence
+                                               and in_profile)
+                            if self._spine_debug and not gate_passed:
+                                # TEMPORARY: diagnoses "line doesn't appear at
+                                # first, only once you start bending" -- shows
+                                # exactly which precondition is failing
+                                # (missing hip/shoulder, low confidence, or
+                                # not detected as in-profile) instead of
+                                # guessing.
+                                if hip and shoulder:
+                                    print(f"[spine_debug] gate FAILED: hip_vis={hip[3]:.2f} "
+                                          f"shoulder_vis={shoulder[3]:.2f} "
+                                          f"lateral_ratio={lateral_ratio:.3f} "
+                                          f"(max {self._spine_max_shoulder_lateral_ratio}) "
+                                          f"in_profile={in_profile}")
+                                else:
+                                    print(f"[spine_debug] gate FAILED: hip={'yes' if hip else 'no'} "
+                                          f"shoulder={'yes' if shoulder else 'no'}")
+                            if gate_passed:
                                 h, w = frame.shape[:2]
                                 raw_hip_px = (hip[0] * w, hip[1] * h)
                                 shoulder_px = (shoulder[0] * w, shoulder[1] * h)
@@ -441,6 +505,66 @@ class PoseEngine:
                                     # backend-keypoint-derived value rather than guessing.
                                     hip_bend_deg = (pose_frame.left_hip_bend_2d if hip_is_left
                                                      else pose_frame.right_hip_bend_2d)
+
+                                # Upright-anchor stabilization (see
+                                # _SPINE_UPRIGHT_REF_ALPHA): update the slow
+                                # reference from this tick's LIVE (pre-blend)
+                                # hip_px/shoulder_px whenever near-straight,
+                                # then blend hip_px/shoulder_px toward that
+                                # reference by a weight that fades to 0 as
+                                # hip_bend_deg rises -- reusing
+                                # _spine_scan_shift_frac's interpolation with
+                                # (standing=1.0, bent=0.0) as a generic
+                                # "how upright, 0..1" weight, the same
+                                # thresholds already used for the shift
+                                # fraction above.
+                                #
+                                # Discard the reference entirely while clearly
+                                # bent, so the NEXT time the person straightens
+                                # up it re-seeds itself from that tick's live
+                                # position (weight=1.0, output=reference=live,
+                                # i.e. no jump) rather than snapping toward a
+                                # reference left over from a PREVIOUS rep's
+                                # stance -- if the person's position drifted
+                                # even slightly between reps (very common over
+                                # several seconds), blending hard toward that
+                                # stale multi-rep-old average pulled the drawn
+                                # anchor toward the wrong spot for a moment
+                                # (reported as the top point "sliding up
+                                # towards the head" right as standing back up),
+                                # then visibly crept back over ~1-2s as the
+                                # reference's own slow EMA caught up to the new
+                                # true position -- that creep was the bug.
+                                if hip_bend_deg >= self._spine_scan_shift_bend_high_deg:
+                                    self._spine_upright_ref_hip_px = None
+                                    self._spine_upright_ref_shoulder_px = None
+                                if hip_bend_deg <= self._spine_scan_shift_bend_low_deg:
+                                    if self._spine_upright_ref_hip_px is None:
+                                        self._spine_upright_ref_hip_px = hip_px
+                                        self._spine_upright_ref_shoulder_px = shoulder_px
+                                    else:
+                                        a = self._spine_upright_ref_alpha
+                                        rhx, rhy = self._spine_upright_ref_hip_px
+                                        self._spine_upright_ref_hip_px = (
+                                            rhx + a * (hip_px[0] - rhx), rhy + a * (hip_px[1] - rhy))
+                                        rsx, rsy = self._spine_upright_ref_shoulder_px
+                                        self._spine_upright_ref_shoulder_px = (
+                                            rsx + a * (shoulder_px[0] - rsx), rsy + a * (shoulder_px[1] - rsy))
+                                if self._spine_upright_ref_hip_px is not None:
+                                    upright_weight = _spine_scan_shift_frac(
+                                        hip_bend_deg, 1.0, 0.0,
+                                        self._spine_scan_shift_bend_low_deg,
+                                        self._spine_scan_shift_bend_high_deg)
+                                    if upright_weight > 0.0:
+                                        ref_hip, ref_shoulder = (self._spine_upright_ref_hip_px,
+                                                                  self._spine_upright_ref_shoulder_px)
+                                        hip_px = (
+                                            hip_px[0] + upright_weight * (ref_hip[0] - hip_px[0]),
+                                            hip_px[1] + upright_weight * (ref_hip[1] - hip_px[1]))
+                                        shoulder_px = (
+                                            shoulder_px[0] + upright_weight * (ref_shoulder[0] - shoulder_px[0]),
+                                            shoulder_px[1] + upright_weight * (ref_shoulder[1] - shoulder_px[1]))
+
                                 scan_shift_frac = _spine_scan_shift_frac(
                                     hip_bend_deg, self._spine_scan_shift_frac_standing,
                                     self._spine_scan_shift_frac,
@@ -470,7 +594,7 @@ class PoseEngine:
                                 roi_result = crop_and_rotate_roi(frame, scan_hip_px, scan_shoulder_px)
                                 if roi_result:
                                     roi_image, hip_point, shoulder_point, chord_len, M = roi_result
-                                    mask = self._backend.get_segmentation_mask(roi_image)
+                                    mask = self._backend.get_segmentation_mask(roi_image, M)
                                     if mask is not None:
                                         profiles = extract_back_contour(mask, hip_point, shoulder_point)
                                         if profiles:

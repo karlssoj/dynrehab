@@ -42,8 +42,6 @@ class SessionRunner:
         self._round_feedback_history: list[list[str]] = []
         self._calibration_last_speak: float = 0.0
         self._calibration_ready_since: float = 0.0
-        self._pending_spine_baseline: Optional[dict] = None
-        self._spine_baseline: Optional[dict] = None
         self._feedback_type: str = "window"  # "window" | "rep"
         self._exercise_elapsed_at_pause: float = 0.0
         self._detect_rep = module.detect_rep
@@ -152,10 +150,6 @@ class SessionRunner:
                     self._calibration_last_speak = now
 
         elif self._state == "countdown":
-            thoracic = pose_data.get("spine_thoracic_curvature")
-            lumbar = pose_data.get("spine_lumbar_curvature")
-            if thoracic is not None and lumbar is not None:
-                self._pending_spine_baseline = {"thoracic": thoracic, "lumbar": lumbar}
             remaining = COUNTDOWN_SECS - elapsed
             count_num = max(0, math.ceil(remaining))
             if count_num != self._countdown_last:
@@ -219,8 +213,6 @@ class SessionRunner:
         self._round_number += 1
         self._round_rep_count = 0
         self._round_frames = []
-        self._spine_baseline = self._pending_spine_baseline
-        self._pending_spine_baseline = None
         if self._reset_round:
             try:
                 self._reset_round()
@@ -231,20 +223,17 @@ class SessionRunner:
         self._finished_at = time.time()
         self._state = "feedback"
         self._state_wall_start = self._finished_at
-        spine_baseline = dict(self._spine_baseline) if self._spine_baseline else None
         round_data = {
             "round_number": self._round_number,
             "rep_count": self._round_rep_count,
             "frames": list(self._round_frames),
             "duration_seconds": self._exercise_secs,
-            "spine_baseline": spine_baseline,
         }
         self._all_rounds.append({
             "round_number": self._round_number,
             "rep_count": self._round_rep_count,
             "frames": list(self._round_frames),
             "duration_seconds": self._exercise_secs,
-            "spine_baseline": spine_baseline,
         })
         try:
             lines = self._generate_round_feedback(round_data) if self._generate_round_feedback else None
@@ -260,18 +249,15 @@ class SessionRunner:
         self._state = "feedback"
         self._state_wall_start = time.time()
         rep_frames = list(self._round_frames[-60:])
-        spine_baseline = dict(self._spine_baseline) if self._spine_baseline else None
         rep_data = {
             "rep_number": self.rep_count,
             "round_number": self._round_number,
             "frames": rep_frames,
-            "spine_baseline": spine_baseline,
         }
         self._all_rounds.append({
             "round_number": self._round_number,
             "rep_number": self.rep_count,
             "frames": rep_frames,
-            "spine_baseline": spine_baseline,
         })
         try:
             lines = self._generate_rep_feedback(rep_data) if self._generate_rep_feedback else None

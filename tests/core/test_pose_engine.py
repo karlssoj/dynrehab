@@ -2,7 +2,8 @@ import pytest
 import numpy as np
 from unittest.mock import MagicMock
 
-from core.pose_engine import PoseEngine, _should_sample_spine, _SPINE_SAMPLE_INTERVAL_SECS
+from core.pose_engine import (PoseEngine, _should_sample_spine, _SPINE_SAMPLE_INTERVAL_SECS,
+                               _spine_scan_shift_frac, _hip_bend_deg)
 
 
 def test_should_sample_spine_true_when_interval_elapsed():
@@ -27,6 +28,60 @@ def test_should_sample_spine_true_for_first_ever_call():
 def test_should_sample_spine_uses_default_interval():
     assert _should_sample_spine(last_sample_time=0.0, now=_SPINE_SAMPLE_INTERVAL_SECS) is True
     assert _should_sample_spine(last_sample_time=0.0, now=_SPINE_SAMPLE_INTERVAL_SECS - 0.01) is False
+
+
+# --- _spine_scan_shift_frac ---------------------------------------------------
+
+def test_spine_scan_shift_frac_standing_below_low_threshold():
+    assert _spine_scan_shift_frac(0.0, standing_frac=0.22, bent_frac=0.12,
+                                   bend_low_deg=10.0, bend_high_deg=45.0) == pytest.approx(0.22)
+    assert _spine_scan_shift_frac(5.0, standing_frac=0.22, bent_frac=0.12,
+                                   bend_low_deg=10.0, bend_high_deg=45.0) == pytest.approx(0.22)
+
+
+def test_spine_scan_shift_frac_bent_above_high_threshold():
+    assert _spine_scan_shift_frac(45.0, standing_frac=0.22, bent_frac=0.12,
+                                   bend_low_deg=10.0, bend_high_deg=45.0) == pytest.approx(0.12)
+    assert _spine_scan_shift_frac(90.0, standing_frac=0.22, bent_frac=0.12,
+                                   bend_low_deg=10.0, bend_high_deg=45.0) == pytest.approx(0.12)
+
+
+def test_spine_scan_shift_frac_interpolates_linearly_between_thresholds():
+    midpoint = _spine_scan_shift_frac(27.5, standing_frac=0.22, bent_frac=0.12,
+                                       bend_low_deg=10.0, bend_high_deg=45.0)
+    assert midpoint == pytest.approx(0.17, abs=1e-6)
+
+
+def test_spine_scan_shift_frac_degenerate_threshold_range_falls_back_to_bent():
+    assert _spine_scan_shift_frac(0.0, standing_frac=0.22, bent_frac=0.12,
+                                   bend_low_deg=45.0, bend_high_deg=45.0) == pytest.approx(0.12)
+    assert _spine_scan_shift_frac(0.0, standing_frac=0.22, bent_frac=0.12,
+                                   bend_low_deg=45.0, bend_high_deg=10.0) == pytest.approx(0.12)
+
+
+# --- _hip_bend_deg -------------------------------------------------------------
+
+def test_hip_bend_deg_zero_when_standing_straight():
+    # Shoulder directly above hip, knee directly below hip -- collinear.
+    shoulder_px = (200.0, 100.0)
+    hip_px = (200.0, 300.0)
+    knee_px = (200.0, 500.0)
+    assert _hip_bend_deg(shoulder_px, hip_px, knee_px) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_hip_bend_deg_increases_as_hip_flexes_forward():
+    hip_px = (200.0, 300.0)
+    knee_px = (200.0, 500.0)  # knee stays directly below hip
+    shoulder_straight = (200.0, 100.0)
+    shoulder_bent = (280.0, 120.0)  # shoulder swung forward
+    straight_bend = _hip_bend_deg(shoulder_straight, hip_px, knee_px)
+    bent_bend = _hip_bend_deg(shoulder_bent, hip_px, knee_px)
+    assert bent_bend > straight_bend
+
+
+def test_hip_bend_deg_zero_on_degenerate_geometry():
+    hip_px = (200.0, 300.0)
+    assert _hip_bend_deg(hip_px, hip_px, (200.0, 500.0)) == pytest.approx(0.0)
 
 
 class _RaisingSegBackend:
@@ -269,9 +324,12 @@ def test_spine_contour_point_count_reads_from_env(monkeypatch):
     assert engine._spine_contour_point_count == 5
 
 
-def test_run_draws_at_most_configured_point_count(mocker):
-    """The number of drawn dots must respect _spine_contour_point_count,
-    not the raw (much longer) per-row contour profile."""
+def test_run_draws_full_resolution_contour_not_downsampled(mocker):
+    """The drawn contour line uses the FULL per-row resolution regardless
+    of _spine_contour_point_count -- that setting only controls the angle
+    measurement's vertex-search bucket count now, not how many points get
+    drawn (an earlier version downsampled the drawn points to match it;
+    this verifies the on-screen line no longer throws away resolution)."""
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
     mock_cap = MagicMock()
     mock_cap.isOpened.return_value = True
@@ -288,7 +346,9 @@ def test_run_draws_at_most_configured_point_count(mocker):
 
     assert len(received) == 1
     assert engine._last_spine_points is not None
-    assert len(engine._last_spine_points) == 3
+    assert len(engine._last_spine_points) > engine._spine_contour_point_count
+    assert engine._last_spine_zone_labels is not None
+    assert len(engine._last_spine_zone_labels) == len(engine._last_spine_points)
 
 
 class _FacingCameraSegmentingBackend:
@@ -383,15 +443,20 @@ class _DistantFacingCameraSegmentingBackend:
         pass
 
 
-def test_init_creates_one_filter_per_spine_contour_point(monkeypatch):
+def test_init_creates_exactly_two_spine_angle_filters(monkeypatch):
+    # Filter count is fixed at 2 (one per zone), independent of
+    # SPINE_CONTOUR_POINT_COUNT (which now only controls the vertex-search
+    # bucket granularity and the on-screen dot count, not filter count).
     monkeypatch.setenv("SPINE_CONTOUR_POINT_COUNT", "7")
     engine = PoseEngine(backend=_RaisingSegBackend())
-    assert len(engine._spine_point_filters) == 7
+    assert engine._spine_thoracic_angle_filter is not None
+    assert engine._spine_lumbar_angle_filter is not None
+    assert engine._spine_thoracic_angle_filter is not engine._spine_lumbar_angle_filter
 
 
-def test_run_sets_zone_curvature_fields_on_successful_sample(mocker):
-    """A successful spine sample must populate both new zone fields, not
-    just the legacy spine_curvature_ratio."""
+def test_run_sets_zone_bend_fields_on_successful_sample(mocker):
+    """A successful spine sample must populate both new zone bend-angle
+    fields, not just the legacy spine_curvature_ratio."""
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
     mock_cap = MagicMock()
     mock_cap.isOpened.return_value = True
@@ -406,11 +471,11 @@ def test_run_sets_zone_curvature_fields_on_successful_sample(mocker):
     engine._run(source=0)
 
     assert len(received) == 1
-    assert received[0].spine_thoracic_curvature is not None
-    assert received[0].spine_lumbar_curvature is not None
+    assert received[0].spine_thoracic_bend_2d is not None
+    assert received[0].spine_lumbar_bend_2d is not None
 
 
-def test_run_leaves_zone_curvature_fields_none_when_sample_fails(mocker):
+def test_run_leaves_zone_bend_fields_none_when_sample_fails(mocker):
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
     mock_cap = MagicMock()
     mock_cap.isOpened.return_value = True
@@ -425,13 +490,13 @@ def test_run_leaves_zone_curvature_fields_none_when_sample_fails(mocker):
     engine._run(source=0)
 
     assert len(received) == 1
-    assert received[0].spine_thoracic_curvature is None
-    assert received[0].spine_lumbar_curvature is None
+    assert received[0].spine_thoracic_bend_2d is None
+    assert received[0].spine_lumbar_bend_2d is None
 
 
-def test_run_resets_point_filters_after_a_failed_sampling_tick(mocker):
-    """After a tick that fails to produce a fresh profile (person lost,
-    mask lost, exception), every per-point OneEuroFilter must be reset --
+def test_run_resets_angle_filters_after_a_failed_sampling_tick(mocker):
+    """After a tick that fails to produce fresh angles (person lost, mask
+    lost, exception), both per-zone OneEuroFilters must be reset --
     verified via OneEuroFilter's documented behavior that the first filter()
     call after a reset returns the raw, un-lagged value regardless of any
     prior state."""
@@ -450,7 +515,8 @@ def test_run_resets_point_filters_after_a_failed_sampling_tick(mocker):
     engine._running = True
     engine._run(source=0)
 
-    assert all(f._t_prev is None for f in engine._spine_point_filters)
+    assert engine._spine_thoracic_angle_filter._t_prev is None
+    assert engine._spine_lumbar_angle_filter._t_prev is None
 
 
 def test_run_skips_spine_sampling_for_distant_person_facing_camera(mocker):
@@ -475,3 +541,84 @@ def test_run_skips_spine_sampling_for_distant_person_facing_camera(mocker):
     pose_frame, annotated = received[0]
     assert pose_frame.spine_curvature_ratio is None
     assert annotated.max() == 0
+
+
+def test_run_shifts_scan_window_toward_shoulder_before_cropping(mocker):
+    """The hip/shoulder points handed to crop_and_rotate_roi must be shifted
+    uniformly toward the shoulder/neck side by _spine_scan_shift_frac of the
+    chord length -- not the raw joint keypoints -- so the sampled window
+    doesn't run exactly hip-joint-to-shoulder-joint (over-including the
+    buttocks at the bottom, excluding the neck at the top)."""
+    import math
+    from core.spine_contour import crop_and_rotate_roi as real_crop_and_rotate_roi
+
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    mock_cap = MagicMock()
+    mock_cap.isOpened.return_value = True
+    mock_cap.read.side_effect = [(True, frame), (False, None)]
+    mocker.patch("core.pose_engine.cv2.VideoCapture", return_value=mock_cap)
+
+    captured = {}
+
+    def spy_crop(frame_arg, hip_px, shoulder_px):
+        captured["hip_px"] = hip_px
+        captured["shoulder_px"] = shoulder_px
+        return real_crop_and_rotate_roi(frame_arg, hip_px, shoulder_px)
+
+    mocker.patch("core.pose_engine.crop_and_rotate_roi", side_effect=spy_crop)
+
+    engine = PoseEngine(backend=_SegmentingBackend())
+    engine._spine_scan_shift_frac = 0.12
+    # Pin the standing fraction to the same value too -- this test is about the
+    # shift-toward-shoulder mechanics, not the standing/bent interpolation
+    # (see _spine_scan_shift_frac's own dedicated tests), and _SegmentingBackend
+    # doesn't provide a knee keypoint so hip_bend_2d guards to 0.0 (would
+    # otherwise select the standing fraction here).
+    engine._spine_scan_shift_frac_standing = 0.12
+    engine._running = True
+    engine._run(source=0)
+
+    # From _SegmentingBackend: shoulder=(0.5, 0.2) -> px (320, 96);
+    # hip=(0.5, 0.6) -> px (320, 288) on a 480x640 frame.
+    raw_hip_px = (320.0, 288.0)
+    raw_shoulder_px = (320.0, 96.0)
+    dx = raw_shoulder_px[0] - raw_hip_px[0]
+    dy = raw_shoulder_px[1] - raw_hip_px[1]
+    expected_hip = (raw_hip_px[0] + dx * 0.12, raw_hip_px[1] + dy * 0.12)
+    expected_shoulder = (raw_shoulder_px[0] + dx * 0.12, raw_shoulder_px[1] + dy * 0.12)
+
+    assert captured["hip_px"] == pytest.approx(expected_hip)
+    assert captured["shoulder_px"] == pytest.approx(expected_shoulder)
+    # A pure translation must not change the chord length.
+    raw_chord = math.hypot(dx, dy)
+    shifted_dx = captured["shoulder_px"][0] - captured["hip_px"][0]
+    shifted_dy = captured["shoulder_px"][1] - captured["hip_px"][1]
+    assert math.hypot(shifted_dx, shifted_dy) == pytest.approx(raw_chord)
+
+
+
+def test_spine_scan_shift_frac_defaults_to_constant(monkeypatch):
+    from core.pose_engine import _SPINE_SCAN_SHIFT_FRAC
+    monkeypatch.delenv("SPINE_SCAN_SHIFT_FRAC", raising=False)
+    engine = PoseEngine(backend=_RaisingSegBackend())
+    assert engine._spine_scan_shift_frac == _SPINE_SCAN_SHIFT_FRAC
+
+
+def test_spine_scan_shift_frac_reads_from_env(monkeypatch):
+    monkeypatch.setenv("SPINE_SCAN_SHIFT_FRAC", "0.2")
+    engine = PoseEngine(backend=_RaisingSegBackend())
+    assert engine._spine_scan_shift_frac == pytest.approx(0.2)
+
+
+def test_spine_zone_display_fraction_is_independent_of_measurement_fraction(monkeypatch):
+    """Widening the on-screen zone-coloring fraction must NOT widen the
+    fraction used by the actual angle measurement -- see
+    _SPINE_ZONE_FRACTION's docstring for the measured cliff this
+    separation exists to prevent."""
+    from core.pose_engine import _SPINE_ZONE_FRACTION, _SPINE_ZONE_DISPLAY_FRACTION
+    monkeypatch.delenv("SPINE_ZONE_FRACTION", raising=False)
+    monkeypatch.setenv("SPINE_ZONE_DISPLAY_FRACTION", "0.45")
+    engine = PoseEngine(backend=_RaisingSegBackend())
+    assert engine._spine_zone_fraction == pytest.approx(_SPINE_ZONE_FRACTION)
+    assert engine._spine_zone_display_fraction == pytest.approx(0.45)
+    assert engine._spine_zone_fraction != engine._spine_zone_display_fraction
